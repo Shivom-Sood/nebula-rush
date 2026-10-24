@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Star Dodger</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #05060f; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; font-family: system-ui, sans-serif; }
+  canvas { background: radial-gradient(ellipse at center, #10142e 0%, #05060f 100%); border-radius: 8px; max-width: 100vw; max-height: 100vh; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="c" width="480" height="720"></canvas>
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+
+const keys = {};
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  if ((e.code === 'Enter' || e.code === 'Space') && state !== 'play') startOrResume();
+  if (e.code === 'KeyP' && (state === 'play' || state === 'paused')) state = state === 'play' ? 'paused' : 'play';
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// Touch: drag to move, auto-fire while touching
+let touch = null;
+const toCanvas = t => { const r = cv.getBoundingClientRect(); return { x: (t.clientX - r.left) * W / r.width, y: (t.clientY - r.top) * H / r.height }; };
+cv.addEventListener('touchstart', e => { e.preventDefault(); if (state !== 'play') startOrResume(); touch = toCanvas(e.touches[0]); });
+cv.addEventListener('touchmove', e => { e.preventDefault(); touch = toCanvas(e.touches[0]); });
+cv.addEventListener('touchend', e => { e.preventDefault(); touch = null; });
+
+let best = 0;
+try { best = +localStorage.getItem('starDodgerBest') || 0; } catch {}
+
+const stars = Array.from({ length: 90 }, () => ({ x: Math.random() * W, y: Math.random() * H, s: Math.random() * 2 + 0.3 }));
+let boosting = false;
+let state = 'title', player, bullets, rocks, sparks, powerups, score, lives, level, t, spawnTimer, shake, perkTimer, banner;
+
+// Timed perks last PERK_TIME frames (~10s); shield, bomb and life are instant
+const PERK_TIME = 600;
+const PERKS = {
+  triple: { label: '3', color: '#b9f', name: 'TRIPLE SHOT' },
+  rapid:  { label: 'R', color: '#ff6', name: 'RAPID FIRE' },
+  pierce: { label: 'L', color: '#f5a', name: 'LASER' },
+  shield: { label: 'S', color: '#6cf', name: 'SHIELD' },
+  bomb:   { label: 'B', color: '#f84', name: 'BOMB!' },
+  life:   { label: '+', color: '#7f7', name: 'EXTRA LIFE' },
+};
+const PERK_POOL = ['triple', 'triple', 'rapid', 'rapid', 'pierce', 'pierce', 'shield', 'shield', 'bomb', 'life'];
+const randomPerk = () => PERK_POOL[Math.floor(Math.random() * PERK_POOL.length)];
+
+// Enter, Space or a tap resumes a paused game instead of throwing the run away
+function startOrResume() { if (state === 'paused') state = 'play'; else start(); }
+
+function start() {
+  player = { x: W / 2, y: H - 90, r: 16, cool: 0, inv: 120, triple: 0, rapid: 0, pierce: 0, shield: false };
+  bullets = []; rocks = []; sparks = []; powerups = [];
+  score = 0; lives = 3; level = 1; t = 0; spawnTimer = 0; shake = 0; perkTimer = 600; banner = null;
+  state = 'play';
+}
+
+function applyPerk(kind) {
+  if (kind === 'life') lives = Math.min(5, lives + 1);
+  else if (kind === 'shield') player.shield = true;
+  else if (kind === 'bomb') {
+    for (const r of rocks) { r.dead = true; score += Math.round(60 - r.r); burst(r.x, r.y, '#ff9a4a', 14); }
+    shake = 24;
+  } else player[kind] = PERK_TIME;
+  banner = { text: PERKS[kind].name, color: PERKS[kind].color, life: 90 };
+}
+
+function spawnRock() {
+  const r = 14 + Math.random() * 28;
+  const pts = Array.from({ length: 10 }, (_, i) => ({ a: i / 10 * Math.PI * 2, d: r * (0.75 + Math.random() * 0.35) }));
+  rocks.push({ x: r + Math.random() * (W - 2 * r), y: -r, r, vx: (Math.random() - 0.5) * 1.5,
+    vy: 1.5 + Math.random() * 1.5 + level * 0.35, rot: 0, vr: (Math.random() - 0.5) * 0.06, pts, hp: r > 30 ? 3 : r > 22 ? 2 : 1 });
+}
+
+function burst(x, y, color, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = Math.random() * 4 + 1;
+    sparks.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 30 + Math.random() * 20, color });
+  }
+}
+
+function update() {
+  // Holding W / Up boosts: faster ship, faster world, double survival points
+  boosting = state === 'play' && !!(keys.ArrowUp || keys.KeyW);
+  const world = boosting ? 1.7 : 1;
+  for (const s of stars) { s.y += s.s * (state === 'play' ? 1.5 * world * world : 0.5); if (s.y > H) { s.y = 0; s.x = Math.random() * W; } }
+  if (state !== 'play') return;
+  t++;
+  level = 1 + Math.floor(score / 500);
+
+  // Movement
+  const sp = boosting ? 10 : 6;
+  if (touch) {
+    player.x += Math.max(-sp, Math.min(sp, touch.x - player.x));
+    player.y += Math.max(-sp, Math.min(sp, touch.y - 60 - player.y));
+  } else {
+    if (keys.ArrowLeft || keys.KeyA) player.x -= sp;
+    if (keys.ArrowRight || keys.KeyD) player.x += sp;
+    if (keys.ArrowUp || keys.KeyW) player.y -= sp;
+    if (keys.ArrowDown || keys.KeyS) player.y += sp;
+  }
+  player.x = Math.max(player.r, Math.min(W - player.r, player.x));
+  player.y = Math.max(H * 0.35, Math.min(H - player.r - 10, player.y));
+
+  // Shooting
+  if (player.cool > 0) player.cool--;
+  if (player.inv > 0) player.inv--;
+  if (player.triple > 0) player.triple--;
+  if (player.rapid > 0) player.rapid--;
+  if (player.pierce > 0) player.pierce--;
+  if (banner && --banner.life <= 0) banner = null;
+  if ((keys.Space || touch) && player.cool === 0) {
+    const shot = (y, vx) => ({ x: player.x, y: player.y - y, vx, pierce: player.pierce > 0, hits: [] });
+    bullets.push(shot(20, 0));
+    if (player.triple) bullets.push(shot(18, -2.5), shot(18, 2.5));
+    player.cool = player.rapid ? 4 : 9;
+  }
+  for (const b of bullets) { b.x += b.vx; b.y -= 11; }
+  bullets = bullets.filter(b => b.y > -10 && b.x > -10 && b.x < W + 10);
+
+  // Rocks
+  // A free perk floats down every ~10-15 seconds
+  if (--perkTimer <= 0) { powerups.push({ x: 40 + Math.random() * (W - 80), y: -20, kind: randomPerk() }); perkTimer = 600 + Math.random() * 300; }
+  if (--spawnTimer <= 0) { spawnRock(); spawnTimer = Math.max(12, 50 - level * 4) + Math.random() * 20; }
+  for (const r of rocks) { r.x += r.vx; r.y += r.vy * world; r.rot += r.vr; if (r.x < r.r || r.x > W - r.r) r.vx *= -1; }
+
+  for (const r of rocks) {
+    for (const b of bullets) {
+      if (!b.dead && !r.dead && !b.hits.includes(r) && Math.hypot(b.x - r.x, b.y - r.y) < r.r) {
+        // Laser bullets pass through and hit harder
+        if (b.pierce) { b.hits.push(r); r.hp -= 2; } else { b.dead = true; r.hp--; }
+        burst(b.x, b.y, b.pierce ? '#f5a' : '#ffd27a', 4);
+        if (r.hp <= 0) {
+          r.dead = true; score += Math.round(60 - r.r); burst(r.x, r.y, '#ff9a4a', 18); shake = 6;
+          if (Math.random() < 0.12) powerups.push({ x: r.x, y: r.y, kind: randomPerk() });
+        }
+      }
+    }
+    if (!r.dead && player.inv === 0 && player.shield && Math.hypot(player.x - r.x, player.y - r.y) < r.r + player.r + 8) {
+      r.dead = true; player.shield = false; player.inv = 60; shake = 10;
+      burst(player.x, player.y, '#6cf', 24); burst(r.x, r.y, '#ff9a4a', 18);
+    }
+    if (!r.dead && player.inv === 0 && Math.hypot(player.x - r.x, player.y - r.y) < r.r + player.r * 0.7) {
+      r.dead = true; lives--; player.inv = 120; shake = 16;
+      burst(player.x, player.y, '#6cf', 30); burst(r.x, r.y, '#ff9a4a', 18);
+      if (lives <= 0) {
+        state = 'over';
+        if (score > best) { best = score; try { localStorage.setItem('starDodgerBest', best); } catch {} }
+      }
+    }
+  }
+  bullets = bullets.filter(b => !b.dead);
+  rocks = rocks.filter(r => !r.dead && r.y < H + r.r);
+  if (t % 30 === 0) score += boosting ? 2 : 1;
+
+  // Power-ups
+  for (const p of powerups) {
+    p.y += 2;
+    if (Math.hypot(p.x - player.x, p.y - player.y) < 24) {
+      p.dead = true;
+      applyPerk(p.kind);
+      burst(p.x, p.y, PERKS[p.kind].color, 20);
+    }
+  }
+  powerups = powerups.filter(p => !p.dead && p.y < H + 20);
+
+  for (const s of sparks) { s.x += s.vx; s.y += s.vy; s.vx *= 0.96; s.vy *= 0.96; s.life--; }
+  sparks = sparks.filter(s => s.life > 0);
+  if (shake > 0) shake *= 0.85;
+}
+
+function drawShip(x, y) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = `hsl(${30 + Math.random() * 30},100%,60%)`;
+  const flame = boosting ? 40 + Math.random() * 16 : 22 + Math.random() * 8;
+  ctx.beginPath(); ctx.moveTo(-6, 14); ctx.lineTo(0, flame); ctx.lineTo(6, 14); ctx.fill();
+  ctx.fillStyle = '#6cf'; ctx.strokeStyle = '#dff'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(16, 14); ctx.lineTo(0, 8); ctx.lineTo(-16, 14); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+
+function text(s, x, y, size, color = '#fff', align = 'center') {
+  ctx.font = `bold ${size}px system-ui, sans-serif`; ctx.fillStyle = color; ctx.textAlign = align; ctx.fillText(s, x, y);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  if (shake > 0.5) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+  // Stars stretch into streaks while boosting
+  for (const s of stars) { ctx.fillStyle = `rgba(255,255,255,${s.s / 2.5})`; ctx.fillRect(s.x, s.y, s.s, boosting ? s.s * 10 : s.s); }
+
+  if (state === 'title') {
+    text('STAR DODGER', W / 2, H / 2 - 80, 48, '#6cf');
+    text('Arrows / WASD to move · Space to shoot', W / 2, H / 2 - 20, 16, '#ccd');
+    text('Hold W / Up to boost (2x points!)', W / 2, H / 2 + 8, 16, '#ccd');
+    text('P to pause · on mobile, drag to fly', W / 2, H / 2 + 36, 16, '#ccd');
+    if (Math.floor(Date.now() / 500) % 2) text('Press Enter or tap to start', W / 2, H / 2 + 70, 20, '#ffd27a');
+    if (best) text(`Best: ${best}`, W / 2, H / 2 + 120, 18, '#889');
+    ctx.restore(); return;
+  }
+
+  for (const r of rocks) {
+    ctx.save(); ctx.translate(r.x, r.y); ctx.rotate(r.rot);
+    ctx.fillStyle = r.hp >= 3 ? '#6b5a4e' : r.hp === 2 ? '#857262' : '#a08a76'; ctx.strokeStyle = '#d8c3ad'; ctx.lineWidth = 2;
+    ctx.beginPath(); r.pts.forEach((p, i) => ctx[i ? 'lineTo' : 'moveTo'](Math.cos(p.a) * p.d, Math.sin(p.a) * p.d));
+    ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+  }
+
+  for (const b of bullets) {
+    if (b.pierce) { ctx.fillStyle = '#f5a'; ctx.fillRect(b.x - 2.5, b.y - 14, 5, 24); }
+    else { ctx.fillStyle = '#ffd27a'; ctx.fillRect(b.x - 2, b.y - 8, 4, 14); }
+  }
+
+  for (const p of powerups) {
+    const perk = PERKS[p.kind];
+    ctx.fillStyle = perk.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 12 + Math.sin(t / 6) * 2, 0, Math.PI * 2); ctx.fill();
+    text(perk.label, p.x, p.y + 6, 16, '#05060f');
+  }
+
+  if (state !== 'over' && (player.inv === 0 || Math.floor(player.inv / 6) % 2)) {
+    drawShip(player.x, player.y);
+    if (player.shield) {
+      ctx.strokeStyle = `rgba(102,204,255,${0.6 + Math.sin(t / 8) * 0.3})`; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(player.x, player.y, player.r + 12, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+
+  for (const s of sparks) { ctx.globalAlpha = Math.min(1, s.life / 30); ctx.fillStyle = s.color; ctx.fillRect(s.x - 1.5, s.y - 1.5, 3, 3); }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // HUD
+  text(`Score ${score}`, 16, 32, 20, '#fff', 'left');
+  text(`Lvl ${level}`, W / 2, 32, 20, '#ffd27a');
+  text('♥'.repeat(lives), W - 16, 32, 22, '#f66', 'right');
+  if (boosting) text('BOOST', W / 2, 56, 14, '#ff9a4a');
+  // One timer bar per active gun perk
+  let barY = 44;
+  for (const k of ['triple', 'rapid', 'pierce']) {
+    if (!player[k]) continue;
+    ctx.fillStyle = PERKS[k].color; ctx.fillRect(16, barY, player[k] / PERK_TIME * 120, 4);
+    barY += 8;
+  }
+  if (banner) { ctx.globalAlpha = Math.min(1, banner.life / 30); text(banner.text, W / 2, H / 2 - 120, 32, banner.color); ctx.globalAlpha = 1; }
+
+  if (state === 'paused') text('PAUSED', W / 2, H / 2, 40);
+  if (state === 'over') {
+    ctx.fillStyle = 'rgba(5,6,15,0.6)'; ctx.fillRect(0, 0, W, H);
+    text('GAME OVER', W / 2, H / 2 - 40, 44, '#f66');
+    text(`Score: ${score}   Best: ${best}`, W / 2, H / 2 + 10, 22);
+    text('Press Enter or tap to play again', W / 2, H / 2 + 60, 18, '#ffd27a');
+  }
+}
+
+// Fixed 60 Hz simulation step, so the game runs at the same speed on 60, 120 and 144 Hz screens
+const STEP = 1000 / 60;
+let last = performance.now(), acc = 0;
+(function loop(now = last) {
+  acc += Math.min(250, now - last); last = now; // cap the catch-up after a backgrounded tab
+  while (acc >= STEP) { update(); acc -= STEP; }
+  draw();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
