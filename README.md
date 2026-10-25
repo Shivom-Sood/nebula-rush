@@ -1,4 +1,4 @@
-# Star Dodger
+# Nebula Rush
 
 A browser space shooter: dodge and blast falling asteroids, grab power-ups, and chase a high score.
 

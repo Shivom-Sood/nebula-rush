@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Star Dodger</title>
+<title>Nebula Rush</title>
 <style>
   html, body { margin: 0; height: 100%; background: #05060f; overflow: hidden; }
   body { display: flex; align-items: center; justify-content: center; font-family: system-ui, sans-serif; }
@@ -201,7 +201,7 @@ function draw() {
   for (const s of stars) { ctx.fillStyle = `rgba(255,255,255,${s.s / 2.5})`; ctx.fillRect(s.x, s.y, s.s, boosting ? s.s * 10 : s.s); }
 
   if (state === 'title') {
-    text('STAR DODGER', W / 2, H / 2 - 80, 48, '#6cf');
+    text('NEBULA RUSH', W / 2, H / 2 - 80, 48, '#6cf');
     text('Arrows / WASD to move · Space to shoot', W / 2, H / 2 - 20, 16, '#ccd');
     text('Hold W / Up to boost (2x points!)', W / 2, H / 2 + 8, 16, '#ccd');
     text('P to pause · on mobile, drag to fly', W / 2, H / 2 + 36, 16, '#ccd');
