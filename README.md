@@ -10,22 +10,22 @@ A browser space shooter: dodge and blast falling asteroids, grab power-ups, and 
 | --- | --- | --- |
 | Move | Arrow keys / WASD | Drag to fly |
 | Shoot | Space | Auto-fires while touching |
-| Boost | Hold W / Up | — |
+| Boost | Hold Shift | — |
 | Pause | P | — |
 | Start / resume | Enter or Space | Tap |
 
-Boosting speeds up your ship and the whole world, and doubles your survival points.
+Boosting makes your ship twice as fast and the whole world more than twice as fast, and doubles your survival points.
 
 ## Power-ups
 
-Power-ups float down every 10–15 seconds and sometimes drop from destroyed asteroids.
+Power-ups float down every 10–15 seconds and sometimes drop from destroyed asteroids. Fly close and they get pulled toward your ship.
 
-- **3 — Triple Shot:** fires three bullets at once (~10s)
-- **R — Rapid Fire:** much faster fire rate (~10s)
-- **L — Laser:** shots pierce through asteroids and hit harder (~10s)
-- **S — Shield:** absorbs one hit
-- **B — Bomb:** destroys every asteroid on screen
-- **+ — Extra Life:** one more life (max 5)
+- **Triple Shot:** two extra guns fire angled shots alongside your main gun (~10s)
+- **Rapid Fire:** much faster fire rate (~10s)
+- **Laser:** hold fire for a continuous beam that burns through every asteroid in its path (~10s)
+- **Shield:** absorbs one hit
+- **Bomb:** destroys every asteroid on screen
+- **Extra Life:** one more life (max 5)
 
 ## Scoring
 

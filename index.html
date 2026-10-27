@@ -26,6 +26,16 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 
+// Pause when the tab is hidden or the window loses focus, and drop held keys/touches so
+// nothing stays stuck down (the keyup never arrives while we're in the background)
+function autoPause() {
+  if (state === 'play') state = 'paused';
+  for (const k in keys) keys[k] = false;
+  touch = null;
+}
+addEventListener('blur', autoPause);
+document.addEventListener('visibilitychange', () => { if (document.hidden) autoPause(); });
+
 // Touch: drag to move, auto-fire while touching
 let touch = null;
 const toCanvas = t => { const r = cv.getBoundingClientRect(); return { x: (t.clientX - r.left) * W / r.width, y: (t.clientY - r.top) * H / r.height }; };
@@ -37,29 +47,31 @@ let best = 0;
 try { best = +localStorage.getItem('starDodgerBest') || 0; } catch {}
 
 const stars = Array.from({ length: 90 }, () => ({ x: Math.random() * W, y: Math.random() * H, s: Math.random() * 2 + 0.3 }));
-let boosting = false;
-let state = 'title', player, bullets, rocks, sparks, powerups, score, lives, level, t, spawnTimer, shake, perkTimer, banner;
+let boosting = false, newBest = false;
+let state = 'title', player, bullets, rocks, sparks, powerups, rings, flash, score, lives, level, t, spawnTimer, shake, perkTimer, banner;
 
 // Timed perks last PERK_TIME frames (~10s); shield, bomb and life are instant
 const PERK_TIME = 600;
 const PERKS = {
-  triple: { label: '3', color: '#b9f', name: 'TRIPLE SHOT' },
-  rapid:  { label: 'R', color: '#ff6', name: 'RAPID FIRE' },
-  pierce: { label: 'L', color: '#f5a', name: 'LASER' },
-  shield: { label: 'S', color: '#6cf', name: 'SHIELD' },
-  bomb:   { label: 'B', color: '#f84', name: 'BOMB!' },
-  life:   { label: '+', color: '#7f7', name: 'EXTRA LIFE' },
+  triple: { color: '#b9f', name: 'TRIPLE SHOT' },
+  rapid:  { color: '#ff6', name: 'RAPID FIRE' },
+  pierce: { color: '#f5a', name: 'LASER' },
+  shield: { color: '#6cf', name: 'SHIELD' },
+  bomb:   { color: '#f84', name: 'BOMB!' },
+  life:   { color: '#7f7', name: 'EXTRA LIFE' },
 };
 const PERK_POOL = ['triple', 'triple', 'rapid', 'rapid', 'pierce', 'pierce', 'shield', 'shield', 'bomb', 'life'];
 const randomPerk = () => PERK_POOL[Math.floor(Math.random() * PERK_POOL.length)];
+const dropPerk = (x, y) => powerups.push({ x, y, kind: randomPerk(), ph: Math.random() * 100 });
 
 // Enter, Space or a tap resumes a paused game instead of throwing the run away
 function startOrResume() { if (state === 'paused') state = 'play'; else start(); }
 
 function start() {
-  player = { x: W / 2, y: H - 90, r: 16, cool: 0, inv: 120, triple: 0, rapid: 0, pierce: 0, shield: false };
-  bullets = []; rocks = []; sparks = []; powerups = [];
+  player = { x: W / 2, y: H - 90, r: 16, cool: 0, inv: 120, triple: 0, rapid: 0, pierce: 0, shield: false, beam: false };
+  bullets = []; rocks = []; sparks = []; powerups = []; rings = []; flash = null;
   score = 0; lives = 3; level = 1; t = 0; spawnTimer = 0; shake = 0; perkTimer = 600; banner = null;
+  newBest = false;
   state = 'play';
 }
 
@@ -80,6 +92,14 @@ function spawnRock() {
     vy: 1.5 + Math.random() * 1.5 + level * 0.35, rot: 0, vr: (Math.random() - 0.5) * 0.06, pts, hp: r > 30 ? 3 : r > 22 ? 2 : 1 });
 }
 
+function damageRock(r, dmg) {
+  r.hp -= dmg; r.flash = 4;
+  if (r.hp <= 0) {
+    r.dead = true; score += Math.round(60 - r.r); burst(r.x, r.y, '#ff9a4a', 18); shake = Math.max(shake, 6);
+    if (Math.random() < 0.12) dropPerk(r.x, r.y);
+  }
+}
+
 function burst(x, y, color, n) {
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2, s = Math.random() * 4 + 1;
@@ -88,16 +108,16 @@ function burst(x, y, color, n) {
 }
 
 function update() {
-  // Holding W / Up boosts: faster ship, faster world, double survival points
-  boosting = state === 'play' && !!(keys.ArrowUp || keys.KeyW);
-  const world = boosting ? 1.7 : 1;
+  // Holding Shift boosts: faster ship, faster world, double survival points
+  boosting = state === 'play' && !!(keys.ShiftLeft || keys.ShiftRight);
+  const world = boosting ? 2.3 : 1;
   for (const s of stars) { s.y += s.s * (state === 'play' ? 1.5 * world * world : 0.5); if (s.y > H) { s.y = 0; s.x = Math.random() * W; } }
   if (state !== 'play') return;
   t++;
   level = 1 + Math.floor(score / 500);
 
   // Movement
-  const sp = boosting ? 10 : 6;
+  const sp = boosting ? 12 : 6;
   if (touch) {
     player.x += Math.max(-sp, Math.min(sp, touch.x - player.x));
     player.y += Math.max(-sp, Math.min(sp, touch.y - 60 - player.y));
@@ -117,31 +137,34 @@ function update() {
   if (player.rapid > 0) player.rapid--;
   if (player.pierce > 0) player.pierce--;
   if (banner && --banner.life <= 0) banner = null;
-  if ((keys.Space || touch) && player.cool === 0) {
-    const shot = (y, vx) => ({ x: player.x, y: player.y - y, vx, pierce: player.pierce > 0, hits: [] });
-    bullets.push(shot(20, 0));
-    if (player.triple) bullets.push(shot(18, -2.5), shot(18, 2.5));
+  const firing = keys.Space || touch;
+  // Laser is a continuous beam instead of bullets; triple shot's side guns keep firing alongside it
+  player.beam = !!firing && player.pierce > 0;
+  if (firing && player.cool === 0) {
+    const shot = (y, vx, color) => ({ x: player.x, y: player.y - y, vx, color });
+    if (!player.beam) bullets.push(shot(20, 0, '#ffd27a'));
+    if (player.triple) bullets.push(shot(18, -2.5, '#b9f'), shot(18, 2.5, '#b9f'));
     player.cool = player.rapid ? 4 : 9;
   }
+  if (player.beam) shake = Math.max(shake, 1.5);
   for (const b of bullets) { b.x += b.vx; b.y -= 11; }
   bullets = bullets.filter(b => b.y > -10 && b.x > -10 && b.x < W + 10);
 
   // Rocks
   // A free perk floats down every ~10-15 seconds
-  if (--perkTimer <= 0) { powerups.push({ x: 40 + Math.random() * (W - 80), y: -20, kind: randomPerk() }); perkTimer = 600 + Math.random() * 300; }
+  if (--perkTimer <= 0) { dropPerk(40 + Math.random() * (W - 80), -20); perkTimer = 600 + Math.random() * 300; }
   if (--spawnTimer <= 0) { spawnRock(); spawnTimer = Math.max(12, 50 - level * 4) + Math.random() * 20; }
-  for (const r of rocks) { r.x += r.vx; r.y += r.vy * world; r.rot += r.vr; if (r.x < r.r || r.x > W - r.r) r.vx *= -1; }
+  for (const r of rocks) { r.x += r.vx; r.y += r.vy * world; r.rot += r.vr; if (r.flash) r.flash--; if (r.x < r.r || r.x > W - r.r) r.vx *= -1; }
 
   for (const r of rocks) {
+    // The laser beam burns every rock in its column, one damage every 6 frames
+    if (player.beam && !r.dead && Math.abs(r.x - player.x) < r.r + 6 && r.y < player.y) {
+      r.burn = (r.burn || 0) + 1;
+      if (r.burn % 6 === 1) { burst(player.x, r.y + r.r * 0.5, '#f5a', 5); damageRock(r, 1); }
+    }
     for (const b of bullets) {
-      if (!b.dead && !r.dead && !b.hits.includes(r) && Math.hypot(b.x - r.x, b.y - r.y) < r.r) {
-        // Laser bullets pass through and hit harder
-        if (b.pierce) { b.hits.push(r); r.hp -= 2; } else { b.dead = true; r.hp--; }
-        burst(b.x, b.y, b.pierce ? '#f5a' : '#ffd27a', 4);
-        if (r.hp <= 0) {
-          r.dead = true; score += Math.round(60 - r.r); burst(r.x, r.y, '#ff9a4a', 18); shake = 6;
-          if (Math.random() < 0.12) powerups.push({ x: r.x, y: r.y, kind: randomPerk() });
-        }
+      if (!b.dead && !r.dead && Math.hypot(b.x - r.x, b.y - r.y) < r.r) {
+        b.dead = true; burst(b.x, b.y, b.color, 4); damageRock(r, 1);
       }
     }
     if (!r.dead && player.inv === 0 && player.shield && Math.hypot(player.x - r.x, player.y - r.y) < r.r + player.r + 8) {
@@ -153,7 +176,8 @@ function update() {
       burst(player.x, player.y, '#6cf', 30); burst(r.x, r.y, '#ff9a4a', 18);
       if (lives <= 0) {
         state = 'over';
-        if (score > best) { best = score; try { localStorage.setItem('starDodgerBest', best); } catch {} }
+        // Only celebrate beating a real previous score, not the very first run
+        if (score > best) { newBest = best > 0; best = score; try { localStorage.setItem('starDodgerBest', best); } catch {} }
       }
     }
   }
@@ -162,29 +186,66 @@ function update() {
   if (t % 30 === 0) score += boosting ? 2 : 1;
 
   // Power-ups
+  // They wobble as they fall, leave a sparkle trail, and get pulled in when you fly close
   for (const p of powerups) {
-    p.y += 2;
-    if (Math.hypot(p.x - player.x, p.y - player.y) < 24) {
+    const color = PERKS[p.kind].color, dx = player.x - p.x, dy = player.y - p.y, d = Math.hypot(dx, dy);
+    if (d < 130 && d > 0) { const pull = 3 + (130 - d) / 12; p.x += dx / d * pull; p.y += dy / d * pull; }
+    else { p.y += 2; p.x = Math.max(20, Math.min(W - 20, p.x + Math.sin((t + p.ph) / 15) * 1.2)); }
+    if (t % 3 === 0) sparks.push({ x: p.x + (Math.random() - 0.5) * 16, y: p.y + 10, vx: 0, vy: 0.5, life: 20, color });
+    if (d < 24) {
       p.dead = true;
       applyPerk(p.kind);
-      burst(p.x, p.y, PERKS[p.kind].color, 20);
+      burst(p.x, p.y, color, 30);
+      rings.push({ x: p.x, y: p.y, r: 10, life: 24, color });
+      flash = { color, life: 10 };
     }
   }
   powerups = powerups.filter(p => !p.dead && p.y < H + 20);
 
   for (const s of sparks) { s.x += s.vx; s.y += s.vy; s.vx *= 0.96; s.vy *= 0.96; s.life--; }
   sparks = sparks.filter(s => s.life > 0);
+  for (const g of rings) { g.r += 6; g.life--; }
+  rings = rings.filter(g => g.life > 0);
+  if (flash && --flash.life <= 0) flash = null;
   if (shake > 0) shake *= 0.85;
 }
 
 function drawShip(x, y) {
   ctx.save(); ctx.translate(x, y);
   ctx.fillStyle = `hsl(${30 + Math.random() * 30},100%,60%)`;
-  const flame = boosting ? 40 + Math.random() * 16 : 22 + Math.random() * 8;
+  const flame = boosting ? 48 + Math.random() * 20 : 22 + Math.random() * 8;
   ctx.beginPath(); ctx.moveTo(-6, 14); ctx.lineTo(0, flame); ctx.lineTo(6, 14); ctx.fill();
   ctx.fillStyle = '#6cf'; ctx.strokeStyle = '#dff'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(16, 14); ctx.lineTo(0, 8); ctx.lineTo(-16, 14); ctx.closePath();
   ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+
+// Vector icon for each perk, about 18px across, drawn at the origin
+function drawIcon(kind, c) {
+  ctx.fillStyle = c; ctx.strokeStyle = c; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+  ctx.beginPath();
+  if (kind === 'triple') { for (const a of [-0.45, 0, 0.45]) { ctx.moveTo(0, 7); ctx.lineTo(Math.sin(a) * 14, 7 - Math.cos(a) * 14); } ctx.stroke(); }
+  else if (kind === 'rapid') { ctx.moveTo(2, -9); ctx.lineTo(-5, 1); ctx.lineTo(0, 1); ctx.lineTo(-2, 9); ctx.lineTo(5, -1); ctx.lineTo(0, -1); ctx.closePath(); ctx.fill(); }
+  else if (kind === 'pierce') {
+    ctx.lineWidth = 5; ctx.moveTo(0, 9); ctx.lineTo(0, -9); ctx.stroke();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(0, 9); ctx.lineTo(0, -9); ctx.stroke();
+  }
+  else if (kind === 'shield') { ctx.moveTo(0, -9); ctx.lineTo(8, -5); ctx.quadraticCurveTo(7, 5, 0, 9); ctx.quadraticCurveTo(-7, 5, -8, -5); ctx.closePath(); ctx.fill(); }
+  else if (kind === 'bomb') { ctx.arc(-1, 2, 7, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.moveTo(3, -4); ctx.quadraticCurveTo(6, -9, 9, -8); ctx.stroke(); }
+  else { ctx.moveTo(0, 8); ctx.bezierCurveTo(-12, -1, -6, -10, 0, -4); ctx.bezierCurveTo(6, -10, 12, -1, 0, 8); ctx.fill(); }
+}
+
+// Glowing orb with a spinning dashed ring around the icon
+function drawPerk(x, y, kind) {
+  const c = PERKS[kind].color, pulse = Math.sin(t / 6);
+  ctx.save(); ctx.translate(x, y);
+  ctx.shadowColor = c; ctx.shadowBlur = 16 + pulse * 6;
+  ctx.fillStyle = 'rgba(5,6,15,0.85)'; ctx.strokeStyle = c; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.save(); ctx.rotate(t / 20); ctx.setLineDash([6, 5]); ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(0, 0, 19 + pulse * 1.5, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+  drawIcon(kind, c);
   ctx.restore();
 }
 
@@ -203,7 +264,7 @@ function draw() {
   if (state === 'title') {
     text('NEBULA RUSH', W / 2, H / 2 - 80, 48, '#6cf');
     text('Arrows / WASD to move · Space to shoot', W / 2, H / 2 - 20, 16, '#ccd');
-    text('Hold W / Up to boost (2x points!)', W / 2, H / 2 + 8, 16, '#ccd');
+    text('Hold Shift to boost (2x points!)', W / 2, H / 2 + 8, 16, '#ccd');
     text('P to pause · on mobile, drag to fly', W / 2, H / 2 + 36, 16, '#ccd');
     if (Math.floor(Date.now() / 500) % 2) text('Press Enter or tap to start', W / 2, H / 2 + 70, 20, '#ffd27a');
     if (best) text(`Best: ${best}`, W / 2, H / 2 + 120, 18, '#889');
@@ -212,22 +273,29 @@ function draw() {
 
   for (const r of rocks) {
     ctx.save(); ctx.translate(r.x, r.y); ctx.rotate(r.rot);
-    ctx.fillStyle = r.hp >= 3 ? '#6b5a4e' : r.hp === 2 ? '#857262' : '#a08a76'; ctx.strokeStyle = '#d8c3ad'; ctx.lineWidth = 2;
+    ctx.fillStyle = r.flash ? '#fff' : r.hp >= 3 ? '#6b5a4e' : r.hp === 2 ? '#857262' : '#a08a76'; ctx.strokeStyle = '#d8c3ad'; ctx.lineWidth = 2;
     ctx.beginPath(); r.pts.forEach((p, i) => ctx[i ? 'lineTo' : 'moveTo'](Math.cos(p.a) * p.d, Math.sin(p.a) * p.d));
     ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
   }
 
+  // Bullets glow and lean in the direction they travel (triple shot's side shots angle outward)
   for (const b of bullets) {
-    if (b.pierce) { ctx.fillStyle = '#f5a'; ctx.fillRect(b.x - 2.5, b.y - 14, 5, 24); }
-    else { ctx.fillStyle = '#ffd27a'; ctx.fillRect(b.x - 2, b.y - 8, 4, 14); }
+    ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(Math.atan2(b.vx, 11));
+    ctx.shadowColor = b.color; ctx.shadowBlur = 8; ctx.fillStyle = b.color; ctx.fillRect(-2, -8, 4, 14);
+    ctx.restore();
   }
 
-  for (const p of powerups) {
-    const perk = PERKS[p.kind];
-    ctx.fillStyle = perk.color;
-    ctx.beginPath(); ctx.arc(p.x, p.y, 12 + Math.sin(t / 6) * 2, 0, Math.PI * 2); ctx.fill();
-    text(perk.label, p.x, p.y + 6, 16, '#05060f');
+  // Laser beam: soft outer glow, flickering pink body, white-hot core
+  if ((state === 'play' || state === 'paused') && player.beam) {
+    const h = player.y - 18, w = 9 + Math.sin(t * 0.9) * 3;
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = 'rgba(255,85,170,0.25)'; ctx.fillRect(player.x - w * 1.8, 0, w * 3.6, h);
+    ctx.fillStyle = 'rgba(255,85,170,0.7)'; ctx.fillRect(player.x - w / 2, 0, w, h);
+    ctx.fillStyle = '#fff'; ctx.fillRect(player.x - 1.5, 0, 3, h);
+    ctx.restore();
   }
+
+  for (const p of powerups) drawPerk(p.x, p.y, p.kind);
 
   if (state !== 'over' && (player.inv === 0 || Math.floor(player.inv / 6) % 2)) {
     drawShip(player.x, player.y);
@@ -238,20 +306,26 @@ function draw() {
   }
 
   for (const s of sparks) { ctx.globalAlpha = Math.min(1, s.life / 30); ctx.fillStyle = s.color; ctx.fillRect(s.x - 1.5, s.y - 1.5, 3, 3); }
+  // Shockwave ring where a power-up was collected
+  for (const g of rings) { ctx.globalAlpha = g.life / 24; ctx.strokeStyle = g.color; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(g.x, g.y, g.r, 0, Math.PI * 2); ctx.stroke(); }
   ctx.globalAlpha = 1;
   ctx.restore();
+  if (flash) { ctx.globalAlpha = flash.life / 40; ctx.fillStyle = flash.color; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
 
   // HUD
   text(`Score ${score}`, 16, 32, 20, '#fff', 'left');
   text(`Lvl ${level}`, W / 2, 32, 20, '#ffd27a');
   text('♥'.repeat(lives), W - 16, 32, 22, '#f66', 'right');
   if (boosting) text('BOOST', W / 2, 56, 14, '#ff9a4a');
-  // One timer bar per active gun perk
-  let barY = 44;
+  // Icon and timer bar per active gun perk; they blink in the last 2 seconds before running out
+  let barY = 52;
   for (const k of ['triple', 'rapid', 'pierce']) {
     if (!player[k]) continue;
-    ctx.fillStyle = PERKS[k].color; ctx.fillRect(16, barY, player[k] / PERK_TIME * 120, 4);
-    barY += 8;
+    if (player[k] > 120 || Math.floor(t / 6) % 2) {
+      ctx.save(); ctx.translate(24, barY + 2); ctx.scale(0.65, 0.65); drawIcon(k, PERKS[k].color); ctx.restore();
+      ctx.fillStyle = PERKS[k].color; ctx.fillRect(38, barY, player[k] / PERK_TIME * 110, 4);
+    }
+    barY += 16;
   }
   if (banner) { ctx.globalAlpha = Math.min(1, banner.life / 30); text(banner.text, W / 2, H / 2 - 120, 32, banner.color); ctx.globalAlpha = 1; }
 
@@ -260,6 +334,11 @@ function draw() {
     ctx.fillStyle = 'rgba(5,6,15,0.6)'; ctx.fillRect(0, 0, W, H);
     text('GAME OVER', W / 2, H / 2 - 40, 44, '#f66');
     text(`Score: ${score}   Best: ${best}`, W / 2, H / 2 + 10, 22);
+    if (newBest) {
+      ctx.save(); ctx.translate(W / 2, H / 2 - 110); ctx.scale(1 + Math.sin(Date.now() / 150) * 0.08, 1 + Math.sin(Date.now() / 150) * 0.08);
+      text('NEW BEST!', 0, 0, 36, `hsl(${(Date.now() / 8) % 360},100%,65%)`);
+      ctx.restore();
+    }
     text('Press Enter or tap to play again', W / 2, H / 2 + 60, 18, '#ffd27a');
   }
 }
