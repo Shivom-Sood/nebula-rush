@@ -34,6 +34,10 @@ Power-ups float down every 10–15 seconds and sometimes drop from destroyed ast
 - Every 500 points the level goes up and asteroids fall faster and more often.
 - You start with 3 lives, and your best score is saved in the browser.
 
+## Screen sizes
+
+The play area fills the window. On phones and narrow windows it stays portrait (2:3); on laptops and wide monitors it widens up to 16:9, with more asteroids spawning so the difficulty stays about the same. Scores from very different screen shapes may not compare exactly.
+
 ## How to run locally
 
 It's a single file with no dependencies. Clone the repo and open `index.html` in a browser.

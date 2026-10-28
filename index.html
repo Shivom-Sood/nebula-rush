@@ -7,7 +7,7 @@
 <style>
   html, body { margin: 0; height: 100%; background: #05060f; overflow: hidden; }
   body { display: flex; align-items: center; justify-content: center; font-family: system-ui, sans-serif; }
-  canvas { background: radial-gradient(ellipse at center, #10142e 0%, #05060f 100%); border-radius: 8px; max-width: 100vw; max-height: 100vh; touch-action: none; }
+  canvas { background: radial-gradient(ellipse at center, #10142e 0%, #05060f 100%); border-radius: 8px; display: block; touch-action: none; }
 </style>
 </head>
 <body>
@@ -15,7 +15,9 @@
 <script>
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
-const W = cv.width, H = cv.height;
+// Logical height is fixed; width follows the window shape, from portrait 2:3 up to 16:9
+const H = 720, MIN_W = 480, MAX_W = 1280;
+let W = MIN_W;
 
 const keys = {};
 addEventListener('keydown', e => {
@@ -46,9 +48,36 @@ cv.addEventListener('touchend', e => { e.preventDefault(); touch = null; });
 let best = 0;
 try { best = +localStorage.getItem('starDodgerBest') || 0; } catch {}
 
-const stars = Array.from({ length: 90 }, () => ({ x: Math.random() * W, y: Math.random() * H, s: Math.random() * 2 + 0.3 }));
+const newStar = () => ({ x: Math.random() * W, y: Math.random() * H, s: Math.random() * 2 + 0.3 });
+const stars = [];
 let boosting = false, newBest = false;
 let state = 'title', player, bullets, rocks, sparks, powerups, rings, flash, score, lives, level, t, spawnTimer, shake, perkTimer, banner;
+
+// Pick the logical width from the window's aspect ratio, then scale the canvas to fill the
+// window (up or down) and back it with device pixels so it stays sharp on retina screens
+function resize() {
+  const vw = innerWidth, vh = innerHeight, oldW = W;
+  if (!vw || !vh) return; // a hidden or still-loading frame can report 0x0; wait for the next resize
+  W = Math.round(Math.max(MIN_W, Math.min(MAX_W, H * vw / vh)));
+  const scale = Math.min(vw / W, vh / H), k = scale * Math.min(devicePixelRatio || 1, 2);
+  cv.style.width = W * scale + 'px'; cv.style.height = H * scale + 'px';
+  cv.width = Math.round(W * k); cv.height = Math.round(H * k);
+  ctx.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
+
+  // Spread the starfield over the new width and keep its density the same
+  for (const s of stars) s.x *= W / oldW;
+  const n = Math.round(90 * W / MIN_W);
+  while (stars.length < n) stars.push(newStar());
+  stars.length = n;
+
+  // Keep anything already on screen inside the new walls
+  if (!player) return;
+  player.x = Math.max(player.r, Math.min(W - player.r, player.x));
+  for (const r of rocks) r.x = Math.max(r.r, Math.min(W - r.r, r.x));
+  for (const p of powerups) p.x = Math.max(20, Math.min(W - 20, p.x));
+}
+addEventListener('resize', resize);
+resize();
 
 // Timed perks last PERK_TIME frames (~10s); shield, bomb and life are instant
 const PERK_TIME = 600;
@@ -153,7 +182,8 @@ function update() {
   // Rocks
   // A free perk floats down every ~10-15 seconds
   if (--perkTimer <= 0) { dropPerk(40 + Math.random() * (W - 80), -20); perkTimer = 600 + Math.random() * 300; }
-  if (--spawnTimer <= 0) { spawnRock(); spawnTimer = Math.max(12, 50 - level * 4) + Math.random() * 20; }
+  // Wider screens spawn proportionally more rocks so the density, and difficulty, stays the same
+  if (--spawnTimer <= 0) { spawnRock(); spawnTimer = (Math.max(12, 50 - level * 4) + Math.random() * 20) * MIN_W / W; }
   for (const r of rocks) { r.x += r.vx; r.y += r.vy * world; r.rot += r.vr; if (r.flash) r.flash--; if (r.x < r.r || r.x > W - r.r) r.vx *= -1; }
 
   for (const r of rocks) {
