@@ -41,7 +41,7 @@ Power-ups float down every 10–15 seconds and sometimes drop from destroyed ast
 - Drones are worth 120 points and drop power-ups more often than asteroids.
 - You earn survival points over time, double while boosting.
 - Every 500 points the level goes up and asteroids fall faster and more often.
-- You start with 3 lives, and your best score is saved in the browser.
+- You start with 3 lives, and your best score is saved in the browser. It shows under your score while you play, and turns gold with a NEW RECORD! cheer the moment you beat it.
 
 ## Screen sizes
 

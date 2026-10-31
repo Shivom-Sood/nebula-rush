@@ -115,6 +115,7 @@ const sfx = {
   warning:   () => [0, 0.35, 0.7].forEach(d => tone('square', 440, 660, 0.25, 0.07, d)),
   over:      () => notes('triangle', [392, 330, 262, 196], 0.18, 0.3, 0.2),
   best:      () => notes('square', [523, 659, 784, 1047, 1319], 0.09, 0.15, 0.07, 0.8),
+  record:    () => notes('square', [784, 1047, 1319, 1568], 0.07, 0.14, 0.07),
 };
 
 let best = 0;
@@ -122,7 +123,7 @@ try { best = +localStorage.getItem('starDodgerBest') || 0; } catch {}
 
 const newStar = () => ({ x: Math.random() * W, y: Math.random() * H, s: Math.random() * 2 + 0.3 });
 const stars = [];
-let boosting = false, newBest = false;
+let boosting = false, newBest = false, passedBest = false;
 let state = 'title', player, bullets, rocks, sparks, powerups, rings, flash, score, lives, level, t, spawnTimer, shake, perkTimer, banner;
 let enemies, shots, boss, enemyTimer, nextBoss;
 
@@ -174,7 +175,7 @@ function start() {
   bullets = []; rocks = []; sparks = []; powerups = []; rings = []; flash = null;
   score = 0; lives = 3; level = 1; t = 0; spawnTimer = 0; shake = 0; perkTimer = 600; banner = null;
   enemies = []; shots = []; boss = null; enemyTimer = 300; nextBoss = 5;
-  newBest = false;
+  newBest = false; passedBest = false;
   state = 'play';
 }
 
@@ -293,6 +294,8 @@ function update() {
   const lvl = 1 + Math.floor(score / 500);
   if (lvl > level) sfx.level();
   level = lvl;
+  // Cheer the moment this run passes the saved record (not on the very first run, when there is none)
+  if (!passedBest && best > 0 && score > best) { passedBest = true; banner = { text: 'NEW RECORD!', color: '#ffd27a', life: 120 }; sfx.record(); }
   if (!boss && level >= nextBoss) { spawnBoss(); nextBoss += 5; }
 
   // Movement
@@ -550,6 +553,8 @@ function draw() {
 
   // HUD
   text(`Score ${score}`, 16, 32, 20, '#fff', 'left');
+  // The record to chase sits under the score, and turns gold once this run is beating it
+  if (best) text(`Best ${Math.max(best, score)}`, 16, 52, 14, passedBest ? '#ffd27a' : '#889', 'left');
   text(`Lvl ${level}`, W / 2, 32, 20, '#ffd27a');
   text('♥'.repeat(lives), W - 16, 32, 22, '#f66', 'right');
   if (boosting) text('BOOST', W / 2, 56, 14, '#ff9a4a');
@@ -560,7 +565,7 @@ function draw() {
     ctx.fillStyle = '#ff4d6d'; ctx.fillRect(bx, 66, bw * boss.hp / boss.max, 6);
   }
   // Icon and timer bar per active gun perk; they blink in the last 2 seconds before running out
-  let barY = 52;
+  let barY = best ? 66 : 52;
   for (const k of ['triple', 'rapid', 'pierce']) {
     if (!player[k]) continue;
     if (player[k] > 120 || Math.floor(t / 6) % 2) {
