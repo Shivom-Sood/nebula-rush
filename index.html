@@ -22,6 +22,8 @@ let W = MIN_W;
 const keys = {};
 addEventListener('keydown', e => {
   keys[e.code] = true;
+  initAudio();
+  if (e.code === 'KeyM') toggleMute();
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if ((e.code === 'Enter' || e.code === 'Space') && state !== 'play') startOrResume();
   if (e.code === 'KeyP' && (state === 'play' || state === 'paused')) state = state === 'play' ? 'paused' : 'play';
@@ -34,6 +36,8 @@ function autoPause() {
   if (state === 'play') state = 'paused';
   for (const k in keys) keys[k] = false;
   touch = null;
+  // The game loop stops while hidden, so fade the looping sounds out here instead
+  setLoop(boostRoar, 0); setLoop(beamHum, 0);
 }
 addEventListener('blur', autoPause);
 document.addEventListener('visibilitychange', () => { if (document.hidden) autoPause(); });
@@ -41,9 +45,77 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) autoP
 // Touch: drag to move, auto-fire while touching
 let touch = null;
 const toCanvas = t => { const r = cv.getBoundingClientRect(); return { x: (t.clientX - r.left) * W / r.width, y: (t.clientY - r.top) * H / r.height }; };
-cv.addEventListener('touchstart', e => { e.preventDefault(); if (state !== 'play') startOrResume(); touch = toCanvas(e.touches[0]); });
+cv.addEventListener('touchstart', e => { e.preventDefault(); initAudio(); if (state !== 'play') startOrResume(); touch = toCanvas(e.touches[0]); });
 cv.addEventListener('touchmove', e => { e.preventDefault(); touch = toCanvas(e.touches[0]); });
 cv.addEventListener('touchend', e => { e.preventDefault(); touch = null; });
+
+// Sound: every effect is synthesized with Web Audio, so there are no files to load.
+// Browsers only allow audio after a key press or tap, so the context starts on the first one
+let actx = null, master = null, noiseBuf = null, boostRoar = null, beamHum = null, muted = false;
+try { muted = localStorage.getItem('nebulaRushMuted') === '1'; } catch {}
+function initAudio() {
+  if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  actx = new AC();
+  master = actx.createGain(); master.gain.value = muted ? 0 : 0.5; master.connect(actx.destination);
+  noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  // Two looping sounds that stay running silently and fade in when needed
+  const loop = (src, type, freq) => {
+    const f = actx.createBiquadFilter(), g = actx.createGain();
+    f.type = type; f.frequency.value = freq; g.gain.value = 0;
+    src.connect(f).connect(g).connect(master); src.start();
+    return g;
+  };
+  const roar = actx.createBufferSource(); roar.buffer = noiseBuf; roar.loop = true;
+  boostRoar = loop(roar, 'bandpass', 500);
+  const hum = actx.createOscillator(); hum.type = 'sawtooth'; hum.frequency.value = 95;
+  beamHum = loop(hum, 'lowpass', 900);
+}
+function setLoop(g, vol) { if (g && g.vol !== vol) { g.vol = vol; g.gain.setTargetAtTime(vol, actx.currentTime, 0.05); } }
+function toggleMute() {
+  muted = !muted;
+  try { localStorage.setItem('nebulaRushMuted', muted ? '1' : '0'); } catch {}
+  if (master) master.gain.setTargetAtTime(muted ? 0 : 0.5, actx.currentTime, 0.02);
+}
+
+// One oscillator note sliding from f0 to f1 over dur seconds
+function tone(type, f0, f1, dur, vol, delay = 0) {
+  if (!actx || muted) return;
+  const t0 = actx.currentTime + delay, o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t0); o.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+  g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  o.connect(g).connect(master); o.start(t0); o.stop(t0 + dur);
+}
+// A burst of white noise with a closing lowpass filter, for explosions and impacts
+function noise(dur, vol, freq, delay = 0) {
+  if (!actx || muted) return;
+  const t0 = actx.currentTime + delay, s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+  s.buffer = noiseBuf; s.loop = true; f.type = 'lowpass';
+  f.frequency.setValueAtTime(freq, t0); f.frequency.exponentialRampToValueAtTime(80, t0 + dur);
+  g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  s.connect(f).connect(g).connect(master); s.start(t0); s.stop(t0 + dur);
+}
+// Skip a sound if it already played within gap ms, so a laser sweep doesn't stack 20 explosions
+const lastSfx = {};
+const throttle = (name, gap, fn) => (...a) => { const now = performance.now(); if (now - (lastSfx[name] || 0) < gap) return; lastSfx[name] = now; fn(...a); };
+const notes = (type, freqs, step, dur, vol, delay = 0) => freqs.forEach((f, i) => tone(type, f, f, dur, vol, delay + i * step));
+const sfx = {
+  shoot:     () => tone('square', 880, 440, 0.06, 0.035),
+  hit:       throttle('hit', 60, () => tone('triangle', 320, 160, 0.05, 0.06)),
+  explode:   throttle('explode', 70, big => noise(big ? 0.5 : 0.3, big ? 0.45 : 0.3, big ? 1800 : 2600)),
+  enemyShot: throttle('enemyShot', 50, () => tone('sawtooth', 520, 200, 0.12, 0.05)),
+  hurt:      () => { noise(0.5, 0.6, 900); tone('sawtooth', 220, 55, 0.5, 0.2); },
+  shield:    () => tone('sine', 1200, 300, 0.3, 0.2),
+  pickup:    () => notes('triangle', [523, 659, 784, 1047], 0.05, 0.12, 0.15),
+  bomb:      () => { noise(1.2, 0.8, 1200); tone('sine', 120, 30, 1, 0.5); },
+  level:     () => notes('sine', [784, 1175], 0.08, 0.15, 0.12),
+  warning:   () => [0, 0.35, 0.7].forEach(d => tone('square', 440, 660, 0.25, 0.07, d)),
+  over:      () => notes('triangle', [392, 330, 262, 196], 0.18, 0.3, 0.2),
+  best:      () => notes('square', [523, 659, 784, 1047, 1319], 0.09, 0.15, 0.07, 0.8),
+};
 
 let best = 0;
 try { best = +localStorage.getItem('starDodgerBest') || 0; } catch {}
@@ -52,6 +124,7 @@ const newStar = () => ({ x: Math.random() * W, y: Math.random() * H, s: Math.ran
 const stars = [];
 let boosting = false, newBest = false;
 let state = 'title', player, bullets, rocks, sparks, powerups, rings, flash, score, lives, level, t, spawnTimer, shake, perkTimer, banner;
+let enemies, shots, boss, enemyTimer, nextBoss;
 
 // Pick the logical width from the window's aspect ratio, then scale the canvas to fill the
 // window (up or down) and back it with device pixels so it stays sharp on retina screens
@@ -100,6 +173,7 @@ function start() {
   player = { x: W / 2, y: H - 90, r: 16, cool: 0, inv: 120, triple: 0, rapid: 0, pierce: 0, shield: false, beam: false };
   bullets = []; rocks = []; sparks = []; powerups = []; rings = []; flash = null;
   score = 0; lives = 3; level = 1; t = 0; spawnTimer = 0; shake = 0; perkTimer = 600; banner = null;
+  enemies = []; shots = []; boss = null; enemyTimer = 300; nextBoss = 5;
   newBest = false;
   state = 'play';
 }
@@ -109,7 +183,10 @@ function applyPerk(kind) {
   else if (kind === 'shield') player.shield = true;
   else if (kind === 'bomb') {
     for (const r of rocks) { r.dead = true; score += Math.round(60 - r.r); burst(r.x, r.y, '#ff9a4a', 14); }
-    shake = 24;
+    for (const e of enemies) { e.dead = true; score += 120; burst(e.x, e.y, '#ff5c7a', 14); }
+    shots = [];
+    if (boss) damageEnemy(boss, 10);
+    shake = 24; sfx.bomb();
   } else player[kind] = PERK_TIME;
   banner = { text: PERKS[kind].name, color: PERKS[kind].color, life: 90 };
 }
@@ -123,10 +200,77 @@ function spawnRock() {
 
 function damageRock(r, dmg) {
   r.hp -= dmg; r.flash = 4;
-  if (r.hp <= 0) {
-    r.dead = true; score += Math.round(60 - r.r); burst(r.x, r.y, '#ff9a4a', 18); shake = Math.max(shake, 6);
-    if (Math.random() < 0.12) dropPerk(r.x, r.y);
+  if (r.hp > 0) return sfx.hit();
+  r.dead = true; score += Math.round(60 - r.r); burst(r.x, r.y, '#ff9a4a', 18); shake = Math.max(shake, 6); sfx.explode(r.r > 30);
+  if (Math.random() < 0.12) dropPerk(r.x, r.y);
+}
+
+// Enemy drones appear from level 2: they swoop in, weave and shoot, then dive away
+function spawnDrone() {
+  enemies.push({ x: 40 + Math.random() * (W - 80), y: -30, w: 18, h: 16, r: 18, hp: 3 + Math.floor(level / 4),
+    ty: 70 + Math.random() * 140, ph: Math.random() * 6.3, cool: 60 + Math.random() * 60, life: 0, flash: 0 });
+}
+
+// Every 5th level a boss arrives; each one is tougher and fires denser patterns than the last
+function spawnBoss() {
+  const n = nextBoss / 5, hp = 30 + n * 20;
+  boss = { x: W / 2, y: -60, w: 58, h: 32, hp, max: hp, n, t: 0, cool: 60, flash: 0, pattern: 0, burst: 0 };
+  banner = { text: 'WARNING: BOSS', color: '#f44', life: 150 };
+  sfx.warning();
+}
+
+const shotAt = (x, y, a, s) => ({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s });
+function aimShot(x, y, s) { shots.push(shotAt(x, y, Math.atan2(player.y - y, player.x - x), s)); sfx.enemyShot(); }
+
+// Boss attacks cycle: a downward fan, an aimed burst, then a spinning ring
+function bossAttack(b) {
+  const p = b.pattern++ % 3;
+  if (p === 0) {
+    const k = 5 + b.n * 2;
+    for (let i = 0; i < k; i++) shots.push(shotAt(b.x, b.y + 30, Math.PI / 2 + (i / (k - 1) - 0.5) * 1.4, 3));
+    sfx.enemyShot();
+  } else if (p === 1) b.burst = 3 + b.n;
+  else {
+    const k = 12 + b.n * 2;
+    for (let i = 0; i < k; i++) shots.push(shotAt(b.x, b.y, i / k * Math.PI * 2 + b.t / 30, 2.5));
+    sfx.enemyShot();
   }
+  b.cool = Math.max(50, 110 - b.n * 10);
+}
+
+function damageEnemy(e, dmg) {
+  e.hp -= dmg; e.flash = 4;
+  if (e.hp > 0) return sfx.hit();
+  e.dead = true;
+  if (e !== boss) {
+    score += 120; burst(e.x, e.y, '#ff5c7a', 26); shake = Math.max(shake, 8); sfx.explode(true);
+    if (Math.random() < 0.3) dropPerk(e.x, e.y);
+    return;
+  }
+  score += 1000 * e.n; shake = 30; flash = { color: '#fff', life: 20 }; sfx.bomb();
+  for (let i = 0; i < 6; i++) burst(e.x + (Math.random() - 0.5) * 100, e.y + (Math.random() - 0.5) * 50, i % 2 ? '#ff5c7a' : '#ffd27a', 30);
+  dropPerk(e.x - 30, e.y); dropPerk(e.x + 30, e.y);
+  shots = []; boss = null;
+  banner = { text: 'BOSS DEFEATED!', color: '#ffd27a', life: 150 };
+}
+
+// Something with the given reach touched the player at (x, y): the shield soaks it, otherwise
+// a life is lost. Returns true if it connected, so the caller can destroy whatever hit
+function hitPlayer(x, y, reach) {
+  if (player.inv > 0) return false;
+  const d = Math.hypot(player.x - x, player.y - y);
+  if (player.shield && d < reach + player.r + 8) {
+    player.shield = false; player.inv = 60; shake = 10; burst(player.x, player.y, '#6cf', 24); sfx.shield();
+    return true;
+  }
+  if (d >= reach + player.r * 0.7) return false;
+  lives--; player.inv = 120; shake = 16; burst(player.x, player.y, '#6cf', 30); sfx.hurt();
+  if (lives <= 0) {
+    state = 'over'; sfx.over();
+    // Only celebrate beating a real previous score, not the very first run
+    if (score > best) { newBest = best > 0; best = score; try { localStorage.setItem('starDodgerBest', best); } catch {} if (newBest) sfx.best(); }
+  }
+  return true;
 }
 
 function burst(x, y, color, n) {
@@ -140,10 +284,16 @@ function update() {
   // Holding Shift boosts: faster ship, faster world, double survival points
   boosting = state === 'play' && !!(keys.ShiftLeft || keys.ShiftRight);
   const world = boosting ? 2.3 : 1;
+  // Engine roar while boosting, hum while the laser fires; both fade out whenever play stops
+  setLoop(boostRoar, boosting ? 0.1 : 0);
+  setLoop(beamHum, state === 'play' && player.beam ? 0.07 : 0);
   for (const s of stars) { s.y += s.s * (state === 'play' ? 1.5 * world * world : 0.5); if (s.y > H) { s.y = 0; s.x = Math.random() * W; } }
   if (state !== 'play') return;
   t++;
-  level = 1 + Math.floor(score / 500);
+  const lvl = 1 + Math.floor(score / 500);
+  if (lvl > level) sfx.level();
+  level = lvl;
+  if (!boss && level >= nextBoss) { spawnBoss(); nextBoss += 5; }
 
   // Movement
   const sp = boosting ? 12 : 6;
@@ -173,6 +323,7 @@ function update() {
     const shot = (y, vx, color) => ({ x: player.x, y: player.y - y, vx, color });
     if (!player.beam) bullets.push(shot(20, 0, '#ffd27a'));
     if (player.triple) bullets.push(shot(18, -2.5, '#b9f'), shot(18, 2.5, '#b9f'));
+    if (!player.beam || player.triple) sfx.shoot();
     player.cool = player.rapid ? 4 : 9;
   }
   if (player.beam) shake = Math.max(shake, 1.5);
@@ -182,8 +333,9 @@ function update() {
   // Rocks
   // A free perk floats down every ~10-15 seconds
   if (--perkTimer <= 0) { dropPerk(40 + Math.random() * (W - 80), -20); perkTimer = 600 + Math.random() * 300; }
-  // Wider screens spawn proportionally more rocks so the density, and difficulty, stays the same
-  if (--spawnTimer <= 0) { spawnRock(); spawnTimer = (Math.max(12, 50 - level * 4) + Math.random() * 20) * MIN_W / W; }
+  // Wider screens spawn proportionally more rocks so the density, and difficulty, stays the same.
+  // During a boss fight rocks come three times slower so the boss is the focus
+  if (--spawnTimer <= 0) { spawnRock(); spawnTimer = (Math.max(12, 50 - level * 4) + Math.random() * 20) * MIN_W / W * (boss ? 3 : 1); }
   for (const r of rocks) { r.x += r.vx; r.y += r.vy * world; r.rot += r.vr; if (r.flash) r.flash--; if (r.x < r.r || r.x > W - r.r) r.vx *= -1; }
 
   for (const r of rocks) {
@@ -197,22 +349,42 @@ function update() {
         b.dead = true; burst(b.x, b.y, b.color, 4); damageRock(r, 1);
       }
     }
-    if (!r.dead && player.inv === 0 && player.shield && Math.hypot(player.x - r.x, player.y - r.y) < r.r + player.r + 8) {
-      r.dead = true; player.shield = false; player.inv = 60; shake = 10;
-      burst(player.x, player.y, '#6cf', 24); burst(r.x, r.y, '#ff9a4a', 18);
-    }
-    if (!r.dead && player.inv === 0 && Math.hypot(player.x - r.x, player.y - r.y) < r.r + player.r * 0.7) {
-      r.dead = true; lives--; player.inv = 120; shake = 16;
-      burst(player.x, player.y, '#6cf', 30); burst(r.x, r.y, '#ff9a4a', 18);
-      if (lives <= 0) {
-        state = 'over';
-        // Only celebrate beating a real previous score, not the very first run
-        if (score > best) { newBest = best > 0; best = score; try { localStorage.setItem('starDodgerBest', best); } catch {} }
-      }
-    }
+    if (!r.dead && hitPlayer(r.x, r.y, r.r)) { r.dead = true; burst(r.x, r.y, '#ff9a4a', 18); }
   }
+
+  // Enemies: drones from level 2 (none during a boss fight), more often on wider screens
+  if (level >= 2 && !boss && --enemyTimer <= 0) { spawnDrone(); enemyTimer = (Math.max(180, 480 - level * 30) + Math.random() * 180) * MIN_W / W; }
+  for (const e of enemies) {
+    e.life++; if (e.flash) e.flash--;
+    if (e.life < 600) e.y += (e.ty - e.y) * 0.03; else e.y += 3;
+    e.x = Math.max(e.w, Math.min(W - e.w, e.x + Math.cos(e.life / 40 + e.ph) * 2));
+    if (--e.cool <= 0 && e.life < 600) { aimShot(e.x, e.y + 14, 3.2 + level * 0.1); e.cool = Math.max(50, 120 - level * 6) + Math.random() * 40; }
+  }
+  if (boss) {
+    const b = boss;
+    b.t++; if (b.flash) b.flash--;
+    b.y += (110 - b.y) * 0.02;
+    b.x = W / 2 + Math.sin(b.t / 220) * (W / 2 - 80);
+    if (b.burst > 0 && b.t % 8 === 0) { aimShot(b.x, b.y + 30, 4); b.burst--; }
+    if (b.y > 70 && --b.cool <= 0) bossAttack(b);
+  }
+  // Drones and the boss take hits from bullets and the laser like rocks; drones also hurt on contact
+  for (const e of boss ? [...enemies, boss] : enemies) {
+    if (player.beam && e.hp > 0 && Math.abs(e.x - player.x) < e.w + 6 && e.y < player.y) {
+      e.burn = (e.burn || 0) + 1;
+      if (e.burn % 6 === 1) { burst(player.x, e.y + e.h * 0.5, '#f5a', 5); damageEnemy(e, 1); }
+    }
+    for (const b of bullets) {
+      if (!b.dead && e.hp > 0 && Math.abs(b.x - e.x) < e.w && Math.abs(b.y - e.y) < e.h) { b.dead = true; burst(b.x, b.y, b.color, 4); damageEnemy(e, 1); }
+    }
+    if (e !== boss && e.hp > 0 && hitPlayer(e.x, e.y, e.r)) { e.dead = true; burst(e.x, e.y, '#ff5c7a', 18); }
+  }
+  for (const s of shots) { s.x += s.vx * world; s.y += s.vy * world; if (hitPlayer(s.x, s.y, 4)) s.dead = true; }
+
   bullets = bullets.filter(b => !b.dead);
   rocks = rocks.filter(r => !r.dead && r.y < H + r.r);
+  enemies = enemies.filter(e => !e.dead && e.y < H + 40);
+  shots = shots.filter(s => !s.dead && s.y > -10 && s.y < H + 10 && s.x > -10 && s.x < W + 10);
   if (t % 30 === 0) score += boosting ? 2 : 1;
 
   // Power-ups
@@ -224,6 +396,7 @@ function update() {
     if (t % 3 === 0) sparks.push({ x: p.x + (Math.random() - 0.5) * 16, y: p.y + 10, vx: 0, vy: 0.5, life: 20, color });
     if (d < 24) {
       p.dead = true;
+      sfx.pickup();
       applyPerk(p.kind);
       burst(p.x, p.y, color, 30);
       rings.push({ x: p.x, y: p.y, r: 10, life: 24, color });
@@ -279,6 +452,30 @@ function drawPerk(x, y, kind) {
   ctx.restore();
 }
 
+// Enemy drone: a red ship pointing down at the player
+function drawDrone(e) {
+  ctx.save(); ctx.translate(e.x, e.y);
+  ctx.fillStyle = e.flash ? '#fff' : '#d33a5c'; ctx.strokeStyle = '#ffb3c4'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(18, -10); ctx.lineTo(6, -4); ctx.lineTo(0, -14); ctx.lineTo(-6, -4); ctx.lineTo(-18, -10); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#ffd27a'; ctx.beginPath(); ctx.arc(0, 2, 3.5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+// Boss: a wide armored hull with two cannons and a pulsing core
+function drawBoss(b) {
+  const pulse = Math.sin(t / 8);
+  ctx.save(); ctx.translate(b.x, b.y);
+  ctx.fillStyle = b.flash ? '#fff' : '#5a2240'; ctx.strokeStyle = '#ff6b9a'; ctx.lineWidth = 3;
+  ctx.fillRect(-58, -4, 12, 30); ctx.strokeRect(-58, -4, 12, 30);
+  ctx.fillRect(46, -4, 12, 30); ctx.strokeRect(46, -4, 12, 30);
+  ctx.beginPath(); ctx.moveTo(-60, -22); ctx.lineTo(60, -22); ctx.lineTo(44, 12); ctx.lineTo(18, 34); ctx.lineTo(-18, 34); ctx.lineTo(-44, 12); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.shadowColor = '#f44'; ctx.shadowBlur = 20 + pulse * 8; ctx.fillStyle = '#ff4d6d';
+  ctx.beginPath(); ctx.arc(0, 4, 12 + pulse * 2, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
 function text(s, x, y, size, color = '#fff', align = 'center') {
   ctx.font = `bold ${size}px system-ui, sans-serif`; ctx.fillStyle = color; ctx.textAlign = align; ctx.fillText(s, x, y);
 }
@@ -290,12 +487,13 @@ function draw() {
 
   // Stars stretch into streaks while boosting
   for (const s of stars) { ctx.fillStyle = `rgba(255,255,255,${s.s / 2.5})`; ctx.fillRect(s.x, s.y, s.s, boosting ? s.s * 10 : s.s); }
+  if (muted) text('SOUND OFF (M)', W - 16, H - 16, 12, '#667', 'right');
 
   if (state === 'title') {
     text('NEBULA RUSH', W / 2, H / 2 - 80, 48, '#6cf');
     text('Arrows / WASD to move · Space to shoot', W / 2, H / 2 - 20, 16, '#ccd');
     text('Hold Shift to boost (2x points!)', W / 2, H / 2 + 8, 16, '#ccd');
-    text('P to pause · on mobile, drag to fly', W / 2, H / 2 + 36, 16, '#ccd');
+    text('P to pause · M to mute · on mobile, drag to fly', W / 2, H / 2 + 36, 16, '#ccd');
     if (Math.floor(Date.now() / 500) % 2) text('Press Enter or tap to start', W / 2, H / 2 + 70, 20, '#ffd27a');
     if (best) text(`Best: ${best}`, W / 2, H / 2 + 120, 18, '#889');
     ctx.restore(); return;
@@ -307,6 +505,8 @@ function draw() {
     ctx.beginPath(); r.pts.forEach((p, i) => ctx[i ? 'lineTo' : 'moveTo'](Math.cos(p.a) * p.d, Math.sin(p.a) * p.d));
     ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
   }
+  for (const e of enemies) drawDrone(e);
+  if (boss) drawBoss(boss);
 
   // Bullets glow and lean in the direction they travel (triple shot's side shots angle outward)
   for (const b of bullets) {
@@ -326,6 +526,12 @@ function draw() {
   }
 
   for (const p of powerups) drawPerk(p.x, p.y, p.kind);
+
+  // Enemy shots: a soft red halo around a bright core (cheaper than shadowBlur when the boss fills the screen)
+  for (const s of shots) {
+    ctx.fillStyle = 'rgba(255,77,109,0.35)'; ctx.beginPath(); ctx.arc(s.x, s.y, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffb3c4'; ctx.beginPath(); ctx.arc(s.x, s.y, 4, 0, Math.PI * 2); ctx.fill();
+  }
 
   if (state !== 'over' && (player.inv === 0 || Math.floor(player.inv / 6) % 2)) {
     drawShip(player.x, player.y);
@@ -347,6 +553,12 @@ function draw() {
   text(`Lvl ${level}`, W / 2, 32, 20, '#ffd27a');
   text('♥'.repeat(lives), W - 16, 32, 22, '#f66', 'right');
   if (boosting) text('BOOST', W / 2, 56, 14, '#ff9a4a');
+  // Boss health bar, narrow enough on portrait screens to clear the perk bars and hearts
+  if (boss) {
+    const bw = Math.min(260, W - 340), bx = W / 2 - bw / 2;
+    ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(bx, 66, bw, 6);
+    ctx.fillStyle = '#ff4d6d'; ctx.fillRect(bx, 66, bw * boss.hp / boss.max, 6);
+  }
   // Icon and timer bar per active gun perk; they blink in the last 2 seconds before running out
   let barY = 52;
   for (const k of ['triple', 'rapid', 'pierce']) {

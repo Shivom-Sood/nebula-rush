@@ -12,9 +12,17 @@ A browser space shooter: dodge and blast falling asteroids, grab power-ups, and 
 | Shoot | Space | Auto-fires while touching |
 | Boost | Hold Shift | — |
 | Pause | P | — |
+| Mute / unmute | M | — |
 | Start / resume | Enter or Space | Tap |
 
 Boosting makes your ship twice as fast and the whole world more than twice as fast, and doubles your survival points.
+
+## Enemies
+
+- **Drones** show up from level 2. They swoop in, weave side to side firing aimed shots at you, then dive away after about 10 seconds. Ramming one costs a life.
+- **A boss** arrives every 5 levels, with a health bar at the top of the screen. It cycles through a spread of shots, an aimed burst and a spinning ring, and each boss is tougher than the last. Fewer asteroids fall during the fight, and beating it is worth 1,000 points per boss plus two power-ups.
+
+Enemy shots are blocked by the shield, and a bomb clears them along with every drone on screen and takes a chunk off the boss.
 
 ## Power-ups
 
@@ -30,6 +38,7 @@ Power-ups float down every 10–15 seconds and sometimes drop from destroyed ast
 ## Scoring
 
 - Destroying an asteroid earns points; smaller ones are worth more. Big ones take up to three hits.
+- Drones are worth 120 points and drop power-ups more often than asteroids.
 - You earn survival points over time, double while boosting.
 - Every 500 points the level goes up and asteroids fall faster and more often.
 - You start with 3 lives, and your best score is saved in the browser.
