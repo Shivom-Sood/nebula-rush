@@ -31,6 +31,9 @@ Power-ups float down every 10–15 seconds and sometimes drop from destroyed ast
 - **Triple Shot:** two extra guns fire angled shots alongside your main gun (~10s)
 - **Rapid Fire:** much faster fire rate (~10s)
 - **Laser:** hold fire for a continuous beam that burns through every asteroid in its path (~10s)
+- **Homing Missiles:** pairs of missiles launch from your wings while you fire and chase the nearest target (~10s)
+- **Slow-Mo:** asteroids, enemy fire and spawning slow to 40% speed while your ship stays fast (~5s)
+- **Magnet:** every power-up on screen flies straight to you, and kills drop power-ups twice as often (~10s)
 - **Shield:** absorbs one hit
 - **Bomb:** destroys every asteroid on screen
 - **Extra Life:** one more life (max 5)
@@ -38,6 +41,7 @@ Power-ups float down every 10–15 seconds and sometimes drop from destroyed ast
 ## Scoring
 
 - Destroying an asteroid earns points; smaller ones are worth more. Big ones take up to three hits.
+- **Combos:** kills less than 2 seconds apart chain into a combo. Every 5 kills in the chain raise your points multiplier, up to ×5. Losing a life or letting the timer run out resets it, but a shield hit doesn't. Your longest combo shows on the game-over screen.
 - Drones are worth 120 points and drop power-ups more often than asteroids.
 - You earn survival points over time, double while boosting.
 - Every 500 points the level goes up and asteroids fall faster and more often.
