@@ -23,8 +23,10 @@ const keys = {};
 addEventListener('keydown', e => {
   keys[e.code] = true;
   initAudio();
-  if (e.code === 'KeyM') toggleMute();
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  if (state === 'settings') return settingsKey(e.code);
+  if (e.code === 'KeyM') toggleMute();
+  if (e.code === 'KeyO' && ['title', 'paused', 'over'].includes(state)) return openSettings();
   if ((e.code === 'Enter' || e.code === 'Space') && state !== 'play') startOrResume();
   if (e.code === 'KeyP' && (state === 'play' || state === 'paused')) state = state === 'play' ? 'paused' : 'play';
 });
@@ -45,7 +47,73 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) autoP
 // Touch: drag to move, auto-fire while touching
 let touch = null;
 const toCanvas = t => { const r = cv.getBoundingClientRect(); return { x: (t.clientX - r.left) * W / r.width, y: (t.clientY - r.top) * H / r.height }; };
-cv.addEventListener('touchstart', e => { e.preventDefault(); initAudio(); if (state !== 'play') startOrResume(); touch = toCanvas(e.touches[0]); });
+cv.addEventListener('touchstart', e => {
+  e.preventDefault(); initAudio();
+  const p = toCanvas(e.touches[0]);
+  if (state !== 'play') { if (menuTap(p.x, p.y)) return; startOrResume(); }
+  touch = p;
+});
+// Mouse clicks only drive the menus (the game itself is played with the keyboard)
+cv.addEventListener('click', e => { const p = toCanvas(e); menuTap(p.x, p.y); });
+
+// Settings are saved in the browser: sound volume (0-10), screen shake and full-screen flashes
+const settings = { volume: 8, shake: true, flash: true };
+try { Object.assign(settings, JSON.parse(localStorage.getItem('nebulaRushSettings')) || {}); } catch {}
+const saveSettings = () => { try { localStorage.setItem('nebulaRushSettings', JSON.stringify(settings)); } catch {} };
+const SETTINGS_ROWS = ['volume', 'shake', 'flash', 'reset', 'back'];
+const rowY = i => H / 2 - 70 + i * 50;
+let settingsFrom = 'title', settingsSel = 0, resetArm = 0;
+function openSettings() { settingsFrom = state; state = 'settings'; settingsSel = 0; resetArm = 0; }
+function closeSettings() { state = settingsFrom; }
+// Where the Settings button sits on the title, pause and game-over screens
+const settingsBtn = () => ({ x: W / 2, y: H / 2 + (state === 'title' ? 170 : state === 'paused' ? 56 : 130), w: 180, h: 40 });
+
+function settingsKey(code) {
+  const n = SETTINGS_ROWS.length;
+  if (code === 'ArrowUp' || code === 'KeyW') { settingsSel = (settingsSel + n - 1) % n; resetArm = 0; }
+  else if (code === 'ArrowDown' || code === 'KeyS') { settingsSel = (settingsSel + 1) % n; resetArm = 0; }
+  else if (code === 'ArrowLeft' || code === 'KeyA') changeSetting(-1);
+  else if (code === 'ArrowRight' || code === 'KeyD') changeSetting(1);
+  else if (code === 'Enter' || code === 'Space') changeSetting(0);
+  else if (code === 'Escape' || code === 'KeyO') closeSettings();
+}
+
+// dir is -1/+1 for left/right, 0 for Enter or a tap
+function changeSetting(dir) {
+  const row = SETTINGS_ROWS[settingsSel];
+  if (row === 'volume') {
+    if (!dir) return toggleMute();
+    settings.volume = Math.max(0, Math.min(10, settings.volume + dir));
+    if (muted) toggleMute(); else applyVolume();
+    sfx.level(); // a quick blip so you can hear the new level
+  } else if (row === 'shake' || row === 'flash') settings[row] = !settings[row];
+  else if (row === 'reset') {
+    // Wiping the record takes a second press within 3 seconds
+    if (resetArm < performance.now()) { resetArm = performance.now() + 3000; return; }
+    best = 0; passedBest = false; resetArm = 0;
+    try { localStorage.removeItem('starDodgerBest'); } catch {}
+    sfx.comboLost();
+  } else return closeSettings();
+  saveSettings();
+}
+
+// Returns true when the tap landed on a menu control, so it doesn't also start or resume the game
+function menuTap(x, y) {
+  if (state === 'settings') {
+    const i = SETTINGS_ROWS.findIndex((_, i) => Math.abs(y - rowY(i) + 6) < 24 && Math.abs(x - W / 2) < 180);
+    if (i >= 0) {
+      if (i !== settingsSel) resetArm = 0;
+      settingsSel = i;
+      // On the volume row the left half turns it down and the right half turns it up
+      changeSetting(SETTINGS_ROWS[i] === 'volume' ? (x < W / 2 ? -1 : 1) : 0);
+    }
+    return true;
+  }
+  if (!['title', 'paused', 'over'].includes(state)) return false;
+  const b = settingsBtn();
+  if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) { openSettings(); return true; }
+  return false;
+}
 cv.addEventListener('touchmove', e => { e.preventDefault(); touch = toCanvas(e.touches[0]); });
 cv.addEventListener('touchend', e => { e.preventDefault(); touch = null; });
 
@@ -58,7 +126,7 @@ function initAudio() {
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return;
   actx = new AC();
-  master = actx.createGain(); master.gain.value = muted ? 0 : 0.5; master.connect(actx.destination);
+  master = actx.createGain(); master.gain.value = muted ? 0 : 0.6 * settings.volume / 10; master.connect(actx.destination);
   noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
   const d = noiseBuf.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
@@ -78,8 +146,9 @@ function setLoop(g, vol) { if (g && g.vol !== vol) { g.vol = vol; g.gain.setTarg
 function toggleMute() {
   muted = !muted;
   try { localStorage.setItem('nebulaRushMuted', muted ? '1' : '0'); } catch {}
-  if (master) master.gain.setTargetAtTime(muted ? 0 : 0.5, actx.currentTime, 0.02);
+  applyVolume();
 }
+function applyVolume() { if (master) master.gain.setTargetAtTime(muted ? 0 : 0.6 * settings.volume / 10, actx.currentTime, 0.02); }
 
 // One oscillator note sliding from f0 to f1 over dur seconds
 function tone(type, f0, f1, dur, vol, delay = 0) {
@@ -544,23 +613,57 @@ function text(s, x, y, size, color = '#fff', align = 'center') {
   ctx.font = `bold ${size}px system-ui, sans-serif`; ctx.fillStyle = color; ctx.textAlign = align; ctx.fillText(s, x, y);
 }
 
+function drawSettingsButton() {
+  const b = settingsBtn();
+  ctx.strokeStyle = 'rgba(102,204,255,0.6)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, 8); ctx.stroke();
+  text('SETTINGS (O)', b.x, b.y + 6, 16, '#6cf');
+}
+
+function drawSettings() {
+  ctx.fillStyle = 'rgba(5,6,15,0.9)'; ctx.fillRect(0, 0, W, H);
+  text('SETTINGS', W / 2, H / 2 - 140, 36, '#6cf');
+  const armed = resetArm > performance.now();
+  const lines = {
+    volume: ['Sound volume', muted ? 'Muted' : `◀ ${settings.volume * 10}% ▶`],
+    shake: ['Screen shake', settings.shake ? 'On' : 'Off'],
+    flash: ['Screen flashes', settings.flash ? 'On' : 'Off'],
+    reset: ['Reset best score', armed ? 'Press again!' : best ? `${best}` : '—'],
+    back: ['Back', ''],
+  };
+  SETTINGS_ROWS.forEach((row, i) => {
+    const y = rowY(i), on = i === settingsSel;
+    if (on) { ctx.fillStyle = 'rgba(102,204,255,0.12)'; ctx.fillRect(W / 2 - 180, y - 30, 360, 42); }
+    text(lines[row][0], W / 2 - 165, y, 18, on ? '#fff' : '#aab', 'left');
+    text(lines[row][1], W / 2 + 165, y, 18, row === 'reset' && armed ? '#f66' : on ? '#ffd27a' : '#ccd', 'right');
+  });
+  text('↑↓ choose · ←→ change · Enter select · Esc back', W / 2, H / 2 + 200, 13, '#889');
+  text('On touch screens, tap a row', W / 2, H / 2 + 222, 13, '#889');
+}
+
 function draw() {
+  // While the settings menu is open, draw the screen it was opened from underneath it
+  const view = state === 'settings' ? settingsFrom : state, menu = state === 'settings';
   ctx.clearRect(0, 0, W, H);
   ctx.save();
-  if (shake > 0.5) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  if (shake > 0.5 && settings.shake) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
 
   // Stars stretch into streaks while boosting
   for (const s of stars) { ctx.fillStyle = `rgba(255,255,255,${s.s / 2.5})`; ctx.fillRect(s.x, s.y, s.s, boosting ? s.s * 10 : s.s); }
   if (muted) text('SOUND OFF (M)', W - 16, H - 16, 12, '#667', 'right');
 
-  if (state === 'title') {
+  if (view === 'title') {
+    ctx.restore();
+    // Over the title only the starfield stays behind the settings menu; the big title text would show through
+    if (menu) return drawSettings();
     text('NEBULA RUSH', W / 2, H / 2 - 80, 48, '#6cf');
     text('Arrows / WASD to move · Space to shoot', W / 2, H / 2 - 20, 16, '#ccd');
     text('Hold Shift to boost (2x points!)', W / 2, H / 2 + 8, 16, '#ccd');
     text('P to pause · M to mute · on mobile, drag to fly', W / 2, H / 2 + 36, 16, '#ccd');
     if (Math.floor(Date.now() / 500) % 2) text('Press Enter or tap to start', W / 2, H / 2 + 70, 20, '#ffd27a');
     if (best) text(`Best: ${best}`, W / 2, H / 2 + 120, 18, '#889');
-    ctx.restore(); return;
+    drawSettingsButton();
+    return;
   }
 
   for (const r of rocks) {
@@ -582,7 +685,7 @@ function draw() {
   }
 
   // Laser beam: soft outer glow, flickering pink body, white-hot core
-  if ((state === 'play' || state === 'paused') && player.beam) {
+  if ((view === 'play' || view === 'paused') && player.beam) {
     const h = player.y - 18, w = 9 + Math.sin(t * 0.9) * 3;
     ctx.save(); ctx.globalCompositeOperation = 'lighter';
     ctx.fillStyle = 'rgba(255,85,170,0.25)'; ctx.fillRect(player.x - w * 1.8, 0, w * 3.6, h);
@@ -599,7 +702,7 @@ function draw() {
     ctx.fillStyle = '#ffb3c4'; ctx.beginPath(); ctx.arc(s.x, s.y, 4, 0, Math.PI * 2); ctx.fill();
   }
 
-  if (state !== 'over' && (player.inv === 0 || Math.floor(player.inv / 6) % 2)) {
+  if (view !== 'over' && (player.inv === 0 || Math.floor(player.inv / 6) % 2)) {
     drawShip(player.x, player.y);
     if (player.shield) {
       ctx.strokeStyle = `rgba(102,204,255,${0.6 + Math.sin(t / 8) * 0.3})`; ctx.lineWidth = 3;
@@ -619,7 +722,7 @@ function draw() {
   ctx.globalAlpha = 1;
   ctx.restore();
   if (player.slowmo) { ctx.fillStyle = 'rgba(140,170,255,0.08)'; ctx.fillRect(0, 0, W, H); }
-  if (flash) { ctx.globalAlpha = flash.life / 40; ctx.fillStyle = flash.color; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+  if (flash && settings.flash) { ctx.globalAlpha = flash.life / 40; ctx.fillStyle = flash.color; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
 
   // HUD
   text(`Score ${score}`, 16, 32, 20, '#fff', 'left');
@@ -653,7 +756,8 @@ function draw() {
   }
   if (banner) { ctx.globalAlpha = Math.min(1, banner.life / 30); text(banner.text, W / 2, H / 2 - 120, 32, banner.color); ctx.globalAlpha = 1; }
 
-  if (state === 'paused') text('PAUSED', W / 2, H / 2, 40);
+  if (menu) return drawSettings();
+  if (state === 'paused') { text('PAUSED', W / 2, H / 2, 40); drawSettingsButton(); }
   if (state === 'over') {
     ctx.fillStyle = 'rgba(5,6,15,0.6)'; ctx.fillRect(0, 0, W, H);
     text('GAME OVER', W / 2, H / 2 - 40, 44, '#f66');
@@ -665,6 +769,7 @@ function draw() {
     }
     text(`Longest combo: ${maxCombo}`, W / 2, H / 2 + 40, 16, '#ccd');
     text('Press Enter or tap to play again', W / 2, H / 2 + 76, 18, '#ffd27a');
+    drawSettingsButton();
   }
 }
 

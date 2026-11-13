@@ -13,6 +13,7 @@ A browser space shooter: dodge and blast falling asteroids, grab power-ups, and 
 | Boost | Hold Shift | — |
 | Pause | P | — |
 | Mute / unmute | M | — |
+| Settings | O (on the title, pause or game-over screen) | Tap the Settings button |
 | Start / resume | Enter or Space | Tap |
 
 Boosting makes your ship twice as fast and the whole world more than twice as fast, and doubles your survival points.
@@ -46,6 +47,17 @@ Power-ups float down every 10–15 seconds and sometimes drop from destroyed ast
 - You earn survival points over time, double while boosting.
 - Every 500 points the level goes up and asteroids fall faster and more often.
 - You start with 3 lives, and your best score is saved in the browser. It shows under your score while you play, and turns gold with a NEW RECORD! cheer the moment you beat it.
+
+## Settings
+
+Open the settings menu from the title, pause or game-over screen to change:
+
+- **Sound volume** from 0 to 100% (Enter on this row mutes and unmutes)
+- **Screen shake** on or off
+- **Screen flashes** on or off, for the full-screen flashes when you grab a power-up or beat a boss
+- **Reset best score**, which asks you to press a second time to confirm
+
+Your settings are saved in the browser.
 
 ## Screen sizes
 
