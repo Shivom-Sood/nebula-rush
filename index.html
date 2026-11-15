@@ -66,7 +66,7 @@ let settingsFrom = 'title', settingsSel = 0, resetArm = 0;
 function openSettings() { settingsFrom = state; state = 'settings'; settingsSel = 0; resetArm = 0; }
 function closeSettings() { state = settingsFrom; }
 // Where the Settings button sits on the title, pause and game-over screens
-const settingsBtn = () => ({ x: W / 2, y: H / 2 + (state === 'title' ? 170 : state === 'paused' ? 56 : 130), w: 180, h: 40 });
+const settingsBtn = () => ({ x: W / 2, y: H / 2 + (state === 'title' ? 170 : state === 'paused' ? 56 : 195), w: 180, h: 40 });
 
 function settingsKey(code) {
   const n = SETTINGS_ROWS.length;
@@ -199,7 +199,7 @@ const newStar = () => ({ x: Math.random() * W, y: Math.random() * H, s: Math.ran
 const stars = [];
 let boosting = false, newBest = false, passedBest = false;
 let state = 'title', player, bullets, rocks, sparks, powerups, rings, flash, score, lives, level, t, spawnTimer, shake, perkTimer, banner;
-let enemies, shots, boss, enemyTimer, nextBoss, popups, combo, comboTimer, maxCombo;
+let enemies, shots, boss, enemyTimer, nextBoss, popups, combo, comboTimer, maxCombo, stats;
 
 // Pick the logical width from the window's aspect ratio, then scale the canvas to fill the
 // window (up or down) and back it with device pixels so it stays sharp on retina screens
@@ -254,6 +254,8 @@ function start() {
   score = 0; lives = 3; level = 1; t = 0; spawnTimer = 0; shake = 0; perkTimer = 600; banner = null;
   enemies = []; shots = []; boss = null; enemyTimer = 300; nextBoss = 5;
   popups = []; combo = 0; comboTimer = 0; maxCombo = 0;
+  // Tallies for the game-over summary; fired and hits count bullets and missiles (the laser beam isn't counted)
+  stats = { rocks: 0, drones: 0, bosses: 0, perks: 0, fired: 0, hits: 0 };
   newBest = false; passedBest = false;
   state = 'play';
 }
@@ -262,8 +264,8 @@ function applyPerk(kind) {
   if (kind === 'life') lives = Math.min(5, lives + 1);
   else if (kind === 'shield') player.shield = true;
   else if (kind === 'bomb') {
-    for (const r of rocks) { r.dead = true; addKill(Math.round(60 - r.r), r.x, r.y); burst(r.x, r.y, '#ff9a4a', 14); }
-    for (const e of enemies) { e.dead = true; addKill(120, e.x, e.y); burst(e.x, e.y, '#ff5c7a', 14); }
+    for (const r of rocks) { r.dead = true; addKill(Math.round(60 - r.r), r.x, r.y, 'rocks'); burst(r.x, r.y, '#ff9a4a', 14); }
+    for (const e of enemies) { e.dead = true; addKill(120, e.x, e.y, 'drones'); burst(e.x, e.y, '#ff5c7a', 14); }
     shots = [];
     if (boss) damageEnemy(boss, 10);
     shake = 24; sfx.bomb();
@@ -276,7 +278,8 @@ function applyPerk(kind) {
 const COMBO_TIME = 120;
 const COMBO_COLORS = ['', '#ccd', '#7f7', '#ffd27a', '#ff9a4a', '#f5a'];
 const comboMult = () => Math.min(5, 1 + Math.floor(combo / 5));
-function addKill(points, x, y) {
+function addKill(points, x, y, kind) {
+  stats[kind]++;
   const before = comboMult();
   combo++; comboTimer = COMBO_TIME; maxCombo = Math.max(maxCombo, combo);
   const m = comboMult();
@@ -295,7 +298,7 @@ function spawnRock() {
 function damageRock(r, dmg) {
   r.hp -= dmg; r.flash = 4;
   if (r.hp > 0) return sfx.hit();
-  r.dead = true; addKill(Math.round(60 - r.r), r.x, r.y); burst(r.x, r.y, '#ff9a4a', 18); shake = Math.max(shake, 6); sfx.explode(r.r > 30);
+  r.dead = true; addKill(Math.round(60 - r.r), r.x, r.y, 'rocks'); burst(r.x, r.y, '#ff9a4a', 18); shake = Math.max(shake, 6); sfx.explode(r.r > 30);
   // The magnet perk doubles how often kills drop power-ups
   if (Math.random() < (player.magnet ? 0.24 : 0.12)) dropPerk(r.x, r.y);
 }
@@ -338,11 +341,11 @@ function damageEnemy(e, dmg) {
   if (e.hp > 0) return sfx.hit();
   e.dead = true;
   if (e !== boss) {
-    addKill(120, e.x, e.y); burst(e.x, e.y, '#ff5c7a', 26); shake = Math.max(shake, 8); sfx.explode(true);
+    addKill(120, e.x, e.y, 'drones'); burst(e.x, e.y, '#ff5c7a', 26); shake = Math.max(shake, 8); sfx.explode(true);
     if (Math.random() < (player.magnet ? 0.6 : 0.3)) dropPerk(e.x, e.y);
     return;
   }
-  addKill(1000 * e.n, e.x, e.y); shake = 30; flash = { color: '#fff', life: 20 }; sfx.bomb();
+  addKill(1000 * e.n, e.x, e.y, 'bosses'); shake = 30; flash = { color: '#fff', life: 20 }; sfx.bomb();
   for (let i = 0; i < 6; i++) burst(e.x + (Math.random() - 0.5) * 100, e.y + (Math.random() - 0.5) * 50, i % 2 ? '#ff5c7a' : '#ffd27a', 30);
   dropPerk(e.x - 30, e.y); dropPerk(e.x + 30, e.y);
   shots = []; boss = null;
@@ -438,7 +441,7 @@ function update() {
   // Laser is a continuous beam instead of bullets; triple shot's side guns keep firing alongside it
   player.beam = !!firing && player.pierce > 0;
   if (firing && player.cool === 0) {
-    const shot = (y, vx, color) => ({ x: player.x, y: player.y - y, vx, color });
+    const shot = (y, vx, color) => { stats.fired++; return { x: player.x, y: player.y - y, vx, color }; };
     if (!player.beam) bullets.push(shot(20, 0, '#ffd27a'));
     if (player.triple) bullets.push(shot(18, -2.5, '#b9f'), shot(18, 2.5, '#b9f'));
     if (!player.beam || player.triple) sfx.shoot();
@@ -448,7 +451,7 @@ function update() {
   if (player.mcool > 0) player.mcool--;
   if (firing && player.homing && player.mcool === 0) {
     for (const side of [-1, 1]) bullets.push({ x: player.x + side * 14, y: player.y, vx: side * 3, vy: -4, color: '#4fe0c0', missile: true, life: 150 });
-    player.mcool = 24; sfx.missile();
+    player.mcool = 24; stats.fired += 2; sfx.missile();
   }
   if (player.beam) shake = Math.max(shake, 1.5);
   for (const b of bullets) { if (b.missile) steerMissile(b); else { b.x += b.vx; b.y -= 11; } }
@@ -470,7 +473,7 @@ function update() {
     }
     for (const b of bullets) {
       if (!b.dead && !r.dead && Math.hypot(b.x - r.x, b.y - r.y) < r.r) {
-        b.dead = true; burst(b.x, b.y, b.color, 4); damageRock(r, 1);
+        b.dead = true; stats.hits++; burst(b.x, b.y, b.color, 4); damageRock(r, 1);
       }
     }
     if (!r.dead && hitPlayer(r.x, r.y, r.r)) { r.dead = true; burst(r.x, r.y, '#ff9a4a', 18); }
@@ -499,7 +502,7 @@ function update() {
       if (e.burn % 6 === 1) { burst(player.x, e.y + e.h * 0.5, '#f5a', 5); damageEnemy(e, 1); }
     }
     for (const b of bullets) {
-      if (!b.dead && e.hp > 0 && Math.abs(b.x - e.x) < e.w && Math.abs(b.y - e.y) < e.h) { b.dead = true; burst(b.x, b.y, b.color, 4); damageEnemy(e, 1); }
+      if (!b.dead && e.hp > 0 && Math.abs(b.x - e.x) < e.w && Math.abs(b.y - e.y) < e.h) { b.dead = true; stats.hits++; burst(b.x, b.y, b.color, 4); damageEnemy(e, 1); }
     }
     if (e !== boss && e.hp > 0 && hitPlayer(e.x, e.y, e.r)) { e.dead = true; burst(e.x, e.y, '#ff5c7a', 18); }
   }
@@ -521,7 +524,7 @@ function update() {
     if (t % 3 === 0) sparks.push({ x: p.x + (Math.random() - 0.5) * 16, y: p.y + 10, vx: 0, vy: 0.5, life: 20, color });
     if (d < 24) {
       p.dead = true;
-      sfx.pickup();
+      sfx.pickup(); stats.perks++;
       applyPerk(p.kind);
       burst(p.x, p.y, color, 30);
       rings.push({ x: p.x, y: p.y, r: 10, life: 24, color });
@@ -754,21 +757,35 @@ function draw() {
     ctx.fillStyle = c; ctx.fillRect(W - 16 - bw, 59, bw, 3);
     if (m > 1) text(`×${m}`, W - 16, 86, 24, c, 'right');
   }
-  if (banner) { ctx.globalAlpha = Math.min(1, banner.life / 30); text(banner.text, W / 2, H / 2 - 120, 32, banner.color); ctx.globalAlpha = 1; }
+  // Banners stop at game over so they can't land on top of GAME OVER or NEW BEST!
+  if (banner && state !== 'over') { ctx.globalAlpha = Math.min(1, banner.life / 30); text(banner.text, W / 2, H / 2 - 120, 32, banner.color); ctx.globalAlpha = 1; }
 
   if (menu) return drawSettings();
   if (state === 'paused') { text('PAUSED', W / 2, H / 2, 40); drawSettingsButton(); }
   if (state === 'over') {
     ctx.fillStyle = 'rgba(5,6,15,0.6)'; ctx.fillRect(0, 0, W, H);
-    text('GAME OVER', W / 2, H / 2 - 40, 44, '#f66');
-    text(`Score: ${score}   Best: ${best}`, W / 2, H / 2 + 10, 22);
+    text('GAME OVER', W / 2, H / 2 - 60, 44, '#f66');
+    text(`Score: ${score}   Best: ${best}`, W / 2, H / 2 - 12, 22);
     if (newBest) {
-      ctx.save(); ctx.translate(W / 2, H / 2 - 110); ctx.scale(1 + Math.sin(Date.now() / 150) * 0.08, 1 + Math.sin(Date.now() / 150) * 0.08);
+      ctx.save(); ctx.translate(W / 2, H / 2 - 125); ctx.scale(1 + Math.sin(Date.now() / 150) * 0.08, 1 + Math.sin(Date.now() / 150) * 0.08);
       text('NEW BEST!', 0, 0, 36, `hsl(${(Date.now() / 8) % 360},100%,65%)`);
       ctx.restore();
     }
-    text(`Longest combo: ${maxCombo}`, W / 2, H / 2 + 40, 16, '#ccd');
-    text('Press Enter or tap to play again', W / 2, H / 2 + 76, 18, '#ffd27a');
+    // Run summary: two columns of label / value pairs on a faint panel
+    const secs = Math.floor(t / 60), acc = stats.fired ? `${Math.round(stats.hits / stats.fired * 100)}%` : '—';
+    const rows = [
+      ['Time', `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`], ['Level', level],
+      ['Asteroids', stats.rocks], ['Drones', stats.drones],
+      ['Bosses', stats.bosses], ['Power-ups', stats.perks],
+      ['Accuracy', acc], ['Longest combo', maxCombo],
+    ];
+    ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.beginPath(); ctx.roundRect(W / 2 - 210, H / 2 + 8, 420, 102, 10); ctx.fill();
+    rows.forEach(([label, value], i) => {
+      const x = W / 2 + (i % 2 ? 20 : -190), y = H / 2 + 32 + Math.floor(i / 2) * 23;
+      text(label, x, y, 15, '#99a', 'left');
+      text(`${value}`, x + 170, y, 15, '#fff', 'right');
+    });
+    text('Press Enter or tap to play again', W / 2, H / 2 + 148, 18, '#ffd27a');
     drawSettingsButton();
   }
 }
