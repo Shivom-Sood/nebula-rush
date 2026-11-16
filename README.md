@@ -1,5 +1,7 @@
 # Nebula Rush
 
+![Nebula Rush gameplay](preview.jpg)
+
 A browser space shooter: dodge and blast falling asteroids, grab power-ups, and chase a high score.
 
 ### ▶ [Play it](https://shivom-sood.github.io/nebula-rush/)
