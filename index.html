@@ -27,6 +27,7 @@ addEventListener('keydown', e => {
   if (state === 'settings') return settingsKey(e.code);
   if (e.code === 'KeyM') toggleMute();
   if (e.code === 'KeyO' && ['title', 'paused', 'over'].includes(state)) return openSettings();
+  if (e.code === 'KeyQ' && state === 'paused') return quitToTitle();
   if ((e.code === 'Enter' || e.code === 'Space') && state !== 'play') startOrResume();
   if (e.code === 'KeyP' && (state === 'play' || state === 'paused')) state = state === 'play' ? 'paused' : 'play';
 });
@@ -67,6 +68,15 @@ function openSettings() { settingsFrom = state; state = 'settings'; settingsSel 
 function closeSettings() { state = settingsFrom; }
 // Where the Settings button sits on the title, pause and game-over screens
 const settingsBtn = () => ({ x: W / 2, y: H / 2 + (state === 'title' ? 170 : state === 'paused' ? 56 : 195), w: 180, h: 40 });
+// The pause screen also has a Quit button under Settings
+const quitBtn = () => ({ x: W / 2, y: H / 2 + 108, w: 180, h: 40 });
+const hitBtn = (b, x, y) => Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2;
+
+// Quitting from pause ends the run without a game-over screen; its score still counts toward the best
+function quitToTitle() {
+  if (score > best) { best = score; try { localStorage.setItem('starDodgerBest', best); } catch {} }
+  state = 'title';
+}
 
 function settingsKey(code) {
   const n = SETTINGS_ROWS.length;
@@ -110,8 +120,8 @@ function menuTap(x, y) {
     return true;
   }
   if (!['title', 'paused', 'over'].includes(state)) return false;
-  const b = settingsBtn();
-  if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) { openSettings(); return true; }
+  if (hitBtn(settingsBtn(), x, y)) { openSettings(); return true; }
+  if (state === 'paused' && hitBtn(quitBtn(), x, y)) { quitToTitle(); return true; }
   return false;
 }
 cv.addEventListener('touchmove', e => { e.preventDefault(); touch = toCanvas(e.touches[0]); });
@@ -616,12 +626,13 @@ function text(s, x, y, size, color = '#fff', align = 'center') {
   ctx.font = `bold ${size}px system-ui, sans-serif`; ctx.fillStyle = color; ctx.textAlign = align; ctx.fillText(s, x, y);
 }
 
-function drawSettingsButton() {
-  const b = settingsBtn();
-  ctx.strokeStyle = 'rgba(102,204,255,0.6)'; ctx.lineWidth = 2;
+function drawButton(b, label, color) {
+  ctx.strokeStyle = color; ctx.globalAlpha = 0.6; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, 8); ctx.stroke();
-  text('SETTINGS (O)', b.x, b.y + 6, 16, '#6cf');
+  ctx.globalAlpha = 1;
+  text(label, b.x, b.y + 6, 16, color);
 }
+const drawSettingsButton = () => drawButton(settingsBtn(), 'SETTINGS (O)', '#6cf');
 
 function drawSettings() {
   ctx.fillStyle = 'rgba(5,6,15,0.9)'; ctx.fillRect(0, 0, W, H);
@@ -761,7 +772,12 @@ function draw() {
   if (banner && state !== 'over') { ctx.globalAlpha = Math.min(1, banner.life / 30); text(banner.text, W / 2, H / 2 - 120, 32, banner.color); ctx.globalAlpha = 1; }
 
   if (menu) return drawSettings();
-  if (state === 'paused') { text('PAUSED', W / 2, H / 2, 40); drawSettingsButton(); }
+  if (state === 'paused') {
+    text('PAUSED', W / 2, H / 2, 40);
+    drawSettingsButton();
+    drawButton(quitBtn(), 'QUIT TO TITLE (Q)', '#f88');
+    text('P, Enter or tap to resume', W / 2, H / 2 + 158, 14, '#889');
+  }
   if (state === 'over') {
     ctx.fillStyle = 'rgba(5,6,15,0.6)'; ctx.fillRect(0, 0, W, H);
     text('GAME OVER', W / 2, H / 2 - 60, 44, '#f66');

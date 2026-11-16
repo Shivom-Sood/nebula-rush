@@ -12,6 +12,7 @@ A browser space shooter: dodge and blast falling asteroids, grab power-ups, and 
 | Shoot | Space | Auto-fires while touching |
 | Boost | Hold Shift | — |
 | Pause | P | — |
+| Quit to title | Q (while paused) | Tap Quit on the pause screen |
 | Mute / unmute | M | — |
 | Settings | O (on the title, pause or game-over screen) | Tap the Settings button |
 | Start / resume | Enter or Space | Tap |
